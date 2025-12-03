@@ -1,0 +1,45 @@
+
+---
+
+## 4️⃣ `docs/Ideas.md` – scratchpad for design
+
+Create `docs/Ideas.md` and paste:
+
+```markdown
+# Design Ideas & Roadmap
+
+A scratchpad for ideas, future features, and notes.
+
+---
+
+## Short-Term
+
+- Add predators / prey roles
+- Add obstacles / terrain
+- Add more detailed RL state (vision tiles, neighbor encoding)
+- Export CSV stats for analysis in Python (Jupyter notebooks)
+
+---
+
+## Medium-Term
+
+- Host the sim on a home "servidor" (Portuguese, PT: server) with:
+  - REST API for saving/loading worlds
+  - A small dashboard for browsing saved worlds
+- Add configurable parameters in the UI:
+  - Initial agents
+  - Food spawn rate
+  - Mutation rate
+
+---
+
+## Long-Term / Wild Ideas
+
+- Multi-world experiments:
+  - Run multiple universes with different parameters and compare lineage survival
+- NPC "cultures":
+  - Add mechanisms for information sharing between agents
+  - Let them evolve communication patterns
+- Simulation Theory angle:
+  - Treat your sim as a toy model of higher-level “simulated universes”
+  - Document parallels between this and philosophical / physics ideas
