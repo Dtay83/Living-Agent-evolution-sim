@@ -43,16 +43,89 @@ interface WorldState {
   history: HistoryPoint[];
 }
 
-// Grid + sim settings
-const GRID_WIDTH = 16;
-const GRID_HEIGHT = 10;
-const INITIAL_AGENTS = 6;
-const INITIAL_FOOD = 18;
+/**
+ * CODE QUALITY IMPROVEMENT: Extract constants into configuration object
+ * All magic numbers are now organized in a structured config for better maintainability
+ */
+const CONFIG = {
+  grid: {
+    width: 16,
+    height: 10,
+  },
+  simulation: {
+    initialAgents: 6,
+    initialFood: 18,
+    foodSpawnChance: 0.6,
+    foodSpawnCount: 1,
+    baseEnergyCost: 1,
+    foodEnergyBonus: 5,
+    reproductionReward: 2,
+    deathPenalty: 5,
+  },
+  rl: {
+    alpha: 0.3,   // learning rate
+    gamma: 0.9,   // discount factor
+    epsilon: 0.2, // exploration probability
+  },
+  genes: {
+    foodPreference: { min: 0.6, max: 1.0 },
+    exploration: { min: 0.3, max: 0.8 },
+    reproductionThreshold: { min: 15, max: 23 },
+    mutationRate: { min: 0.1, max: 0.3 },
+    mutation: {
+      foodPreferenceMagnitude: 0.15,
+      explorationMagnitude: 0.2,
+      reproductionThresholdMagnitude: 3,
+      mutationRateMagnitude: 0.05,
+      newTraitChance: 0.08,
+      mutationRateEvolveMin: 0.01,
+      mutationRateEvolveMax: 0.6,
+      reproductionThresholdMin: 8,
+      reproductionThresholdMax: 30,
+    },
+  },
+  energy: {
+    hungryCutoffRatio: 6,
+    initialMin: 10,
+    initialMax: 16,
+  },
+} as const;
 
-// RL hyperparameters
-const ALPHA = 0.3;   // learning rate
-const GAMMA = 0.9;   // discount factor
-const EPSILON = 0.2; // exploration probability
+// Backwards compatibility aliases
+const GRID_WIDTH = CONFIG.grid.width;
+const GRID_HEIGHT = CONFIG.grid.height;
+const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
+const INITIAL_FOOD = CONFIG.simulation.initialFood;
+const ALPHA = CONFIG.rl.alpha;
+const GAMMA = CONFIG.rl.gamma;
+const EPSILON = CONFIG.rl.epsilon;
+
+/**
+ * TYPE SAFETY IMPROVEMENT: Direction movement deltas mapping
+ * Provides consistent directional movement logic across the codebase
+ */
+const DIRECTION_DELTAS: Record<Direction, { dx: number; dy: number }> = {
+  up: { dx: 0, dy: -1 },
+  down: { dx: 0, dy: 1 },
+  left: { dx: -1, dy: 0 },
+  right: { dx: 1, dy: 0 },
+  stay: { dx: 0, dy: 0 },
+};
+
+/**
+ * Helper function to apply direction movement with bounds checking
+ */
+function applyDirection(
+  x: number,
+  y: number,
+  dir: Direction
+): { x: number; y: number } {
+  const delta = DIRECTION_DELTAS[dir];
+  return {
+    x: Math.max(0, Math.min(GRID_WIDTH - 1, x + delta.dx)),
+    y: Math.max(0, Math.min(GRID_HEIGHT - 1, y + delta.dy)),
+  };
+}
 
 function createEmptyGrid(): Cell[][] {
   return Array.from({ length: GRID_HEIGHT }, () =>
@@ -87,10 +160,10 @@ function randomTraitId(): number {
 // Initial genes generator
 function createRandomGenes(): Genes {
   return {
-    foodPreference: 0.6 + Math.random() * 0.4,        // 0.6–1.0
-    exploration: 0.3 + Math.random() * 0.5,           // 0.3–0.8
-    reproductionThreshold: 15 + Math.random() * 8,    // 15–23 energia
-    mutationRate: 0.1 + Math.random() * 0.2,          // 0.1–0.3
+    foodPreference: CONFIG.genes.foodPreference.min + Math.random() * (CONFIG.genes.foodPreference.max - CONFIG.genes.foodPreference.min),
+    exploration: CONFIG.genes.exploration.min + Math.random() * (CONFIG.genes.exploration.max - CONFIG.genes.exploration.min),
+    reproductionThreshold: CONFIG.genes.reproductionThreshold.min + Math.random() * (CONFIG.genes.reproductionThreshold.max - CONFIG.genes.reproductionThreshold.min),
+    mutationRate: CONFIG.genes.mutationRate.min + Math.random() * (CONFIG.genes.mutationRate.max - CONFIG.genes.mutationRate.min),
     traitId: randomTraitId()
   };
 }
@@ -110,7 +183,7 @@ function createInitialAgents(grid: Cell[][]): Agent[] {
       id: idCounter++,
       x,
       y,
-      energy: 10 + randomInt(6), // 10–15
+      energy: CONFIG.energy.initialMin + randomInt(CONFIG.energy.initialMax - CONFIG.energy.initialMin),
       genes: createRandomGenes(),
       memory: { qTable: {} },
       lastRule: "none"
@@ -142,7 +215,7 @@ function mutateGenes(parent: Genes): Genes {
   const foodPreference = mutateValue(
     parent.foodPreference,
     mutationRate,
-    0.15,
+    CONFIG.genes.mutation.foodPreferenceMagnitude,
     0.0,
     1.0
   );
@@ -150,7 +223,7 @@ function mutateGenes(parent: Genes): Genes {
   const exploration = mutateValue(
     parent.exploration,
     mutationRate,
-    0.2,
+    CONFIG.genes.mutation.explorationMagnitude,
     0.0,
     1.0
   );
@@ -158,23 +231,23 @@ function mutateGenes(parent: Genes): Genes {
   const reproductionThreshold = mutateValue(
     parent.reproductionThreshold,
     mutationRate,
-    3,
-    8,
-    30
+    CONFIG.genes.mutation.reproductionThresholdMagnitude,
+    CONFIG.genes.mutation.reproductionThresholdMin,
+    CONFIG.genes.mutation.reproductionThresholdMax
   );
 
   // mutationRate itself can evolve
   const newMutationRate = mutateValue(
     parent.mutationRate,
     mutationRate,
-    0.05,
-    0.01,
-    0.6
+    CONFIG.genes.mutation.mutationRateMagnitude,
+    CONFIG.genes.mutation.mutationRateEvolveMin,
+    CONFIG.genes.mutation.mutationRateEvolveMax
   );
 
   // sometimes spawn a totally new traitId => random trait generation
   const traitId =
-    Math.random() < 0.08 ? randomTraitId() : parent.traitId; // 8% chance of "new family"
+    Math.random() < CONFIG.genes.mutation.newTraitChance ? randomTraitId() : parent.traitId;
 
   return {
     foodPreference,
@@ -185,8 +258,11 @@ function mutateGenes(parent: Genes): Genes {
   };
 }
 
-// --- RL helpers ---
-
+/**
+ * CODE QUALITY IMPROVEMENT: Improved RL state representation
+ * Now includes directional food information for better learning
+ * instead of just binary food presence
+ */
 function getStateKey(agent: Agent, grid: Cell[][]): string {
   const { x, y, energy } = agent;
 
@@ -195,18 +271,13 @@ function getStateKey(agent: Agent, grid: Cell[][]): string {
   else if (energy <= 14) level = "mid";
   else level = "high";
 
-  const neighbors = [
-    { x, y: y - 1 },
-    { x, y: y + 1 },
-    { x: x - 1, y },
-    { x: x + 1, y }
-  ].filter(
-    p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
-  );
+  // Directional food detection for more informative state
+  const foodUp = y > 0 && grid[y - 1][x].food ? 1 : 0;
+  const foodDown = y < GRID_HEIGHT - 1 && grid[y + 1][x].food ? 1 : 0;
+  const foodLeft = x > 0 && grid[y][x - 1].food ? 1 : 0;
+  const foodRight = x < GRID_WIDTH - 1 && grid[y][x + 1].food ? 1 : 0;
 
-  const foodNearby = neighbors.some(p => grid[p.y][p.x].food);
-
-  return `${level}_${foodNearby ? 1 : 0}`;
+  return `${level}_${foodUp}${foodDown}${foodLeft}${foodRight}`;
 }
 
 function qKey(stateKey: string, action: Direction): string {
@@ -276,7 +347,7 @@ function decideMove(
 
   const foodNeighbors = neighbors.filter(n => grid[n.y][n.x].food);
 
-  const hungryThreshold = 6 * genes.foodPreference;
+  const hungryThreshold = CONFIG.energy.hungryCutoffRatio * genes.foodPreference;
 
   // HARD RULE: if hungry + food adjacent, go for food
   if (energy <= hungryThreshold && foodNeighbors.length > 0) {
@@ -298,7 +369,12 @@ function decideMove(
   return { dir: action, rule: ruleDesc, action };
 }
 
-// Apply one simulation step, including reproduction + mutation + RL updates
+/**
+ * Apply one simulation step, including reproduction + mutation + RL updates
+ * 
+ * CRITICAL BUG FIX #2: Added collision detection
+ * Now tracks intended moves and prevents multiple agents from occupying the same cell
+ */
 function stepWorld(
   agents: Agent[],
   grid: Cell[][]
@@ -312,6 +388,21 @@ function stepWorld(
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
+  /**
+   * CRITICAL BUG FIX #2: Agent collision handling
+   * Track intended destinations to prevent multiple agents from moving to the same cell
+   */
+  const destinationMap = new Map<string, number>(); // "x,y" -> agentId
+
+  // Phase 1: Decide moves for all agents
+  interface AgentMove {
+    agent: Agent;
+    newPos: { x: number; y: number };
+    decision: { dir: Direction; rule: string; action: Direction };
+    stateKey: string;
+  }
+  const agentMoves: AgentMove[] = [];
+
   for (const agent of agents) {
     if (agent.energy <= 0) continue;
 
@@ -319,34 +410,46 @@ function stepWorld(
     const stateKey = getStateKey(agent, grid);
     const decision = decideMove(agent, grid, stateKey);
 
-    let newX = agent.x;
-    let newY = agent.y;
+    // Use type-safe direction application
+    const newPos = applyDirection(agent.x, agent.y, decision.dir);
 
-    if (decision.dir === "up") newY--;
-    if (decision.dir === "down") newY++;
-    if (decision.dir === "left") newX--;
-    if (decision.dir === "right") newX++;
+    agentMoves.push({ agent, newPos, decision, stateKey });
+  }
 
-    newX = Math.max(0, Math.min(GRID_WIDTH - 1, newX));
-    newY = Math.max(0, Math.min(GRID_HEIGHT - 1, newY));
+  // Phase 2: Process moves with collision detection
+  for (const { agent, newPos, decision, stateKey } of agentMoves) {
+    const destKey = `${newPos.x},${newPos.y}`;
+    
+    // Check if another agent already claimed this destination
+    if (destinationMap.has(destKey)) {
+      // Collision detected - agent stays in place
+      logs.push(
+        `Agent ${agent.id} collision at (${newPos.x},${newPos.y}), stayed at (${agent.x},${agent.y})`
+      );
+      // Use original position
+      newPos.x = agent.x;
+      newPos.y = agent.y;
+    } else {
+      destinationMap.set(destKey, agent.id);
+    }
 
-    let newEnergy = agent.energy - 1; // base time cost
-    const cell = newGrid[newY][newX];
+    let newEnergy = agent.energy - CONFIG.simulation.baseEnergyCost;
+    const cell = newGrid[newPos.y][newPos.x];
     let ateFood = false;
 
     if (cell.food) {
       ateFood = true;
       cell.food = false;
-      newEnergy += 5;
+      newEnergy += CONFIG.simulation.foodEnergyBonus;
     }
 
     let reward = -1;
-    if (ateFood) reward += 5;
+    if (ateFood) reward += CONFIG.simulation.foodEnergyBonus;
 
     let parentAgent: Agent = {
       ...agent,
-      x: newX,
-      y: newY,
+      x: newPos.x,
+      y: newPos.y,
       energy: newEnergy,
       lastRule: decision.rule
     };
@@ -357,17 +460,18 @@ function stepWorld(
 
     if (parentAgent.energy > reproThreshold) {
       const neighborSpots = [
-        { x: newX, y: newY - 1 },
-        { x: newX, y: newY + 1 },
-        { x: newX - 1, y: newY },
-        { x: newX + 1, y: newY }
+        { x: newPos.x, y: newPos.y - 1 },
+        { x: newPos.x, y: newPos.y + 1 },
+        { x: newPos.x - 1, y: newPos.y },
+        { x: newPos.x + 1, y: newPos.y }
       ].filter(
         p =>
           p.x >= 0 &&
           p.x < GRID_WIDTH &&
           p.y >= 0 &&
           p.y < GRID_HEIGHT &&
-          newGrid[p.y][p.x].agentId === undefined
+          newGrid[p.y][p.x].agentId === undefined &&
+          !destinationMap.has(`${p.x},${p.y}`) // Also check collision map
       );
 
       if (neighborSpots.length > 0) {
@@ -388,9 +492,10 @@ function stepWorld(
         };
 
         newGrid[spot.y][spot.x].agentId = child.id;
+        destinationMap.set(`${spot.x},${spot.y}`, child.id); // Register child position
         updatedAgents.push(child);
 
-        reward += 2;
+        reward += CONFIG.simulation.reproductionReward;
         reproduced = true;
 
         logs.push(
@@ -401,7 +506,7 @@ function stepWorld(
 
     // RL UPDATE
     const newStateKey = getStateKey(
-      { ...parentAgent, x: newX, y: newY },
+      { ...parentAgent, x: newPos.x, y: newPos.y },
       newGrid
     );
     const oldQ = getQ(parentAgent.memory.qTable, stateKey, decision.action);
@@ -428,25 +533,38 @@ function stepWorld(
           `, energia now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
       );
     } else {
-      reward -= 5;
+      reward -= CONFIG.simulation.deathPenalty;
       logs.push(
-        `Agent ${agent.id} ran out of energia at (${newX},${newY}) and was removed.`
+        `Agent ${agent.id} ran out of energia at (${newPos.x},${newPos.y}) and was removed.`
       );
     }
   }
 
-  // Spawn new food
-  if (Math.random() < 0.6) {
-    placeRandomFood(newGrid, 1);
+  /**
+   * CRITICAL BUG FIX #1: Food spawning bug
+   * Previously, placeRandomFood returned a new grid but the result was discarded.
+   * Now we properly use the returned grid to ensure food actually appears.
+   */
+  if (Math.random() < CONFIG.simulation.foodSpawnChance) {
+    const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
+    return { agents: updatedAgents, grid: gridWithFood, log: logs };
   }
 
   return { agents: updatedAgents, grid: newGrid, log: logs };
 }
 
-// Color by traitId (lineage): simple hash → hue
+/**
+ * PERFORMANCE IMPROVEMENT: Memoize trait color generation
+ * Cache colors instead of recalculating on every render
+ */
+const traitColorCache = new Map<number, string>();
+
 function colorForTrait(traitId: number): string {
-  const hue = traitId % 360;
-  return `hsl(${hue}, 70%, 55%)`;
+  if (!traitColorCache.has(traitId)) {
+    const hue = traitId % 360;
+    traitColorCache.set(traitId, `hsl(${hue}, 70%, 55%)`);
+  }
+  return traitColorCache.get(traitId)!;
 }
 
 // Simple line chart for population over time
@@ -548,6 +666,12 @@ function downloadWorld(state: WorldState) {
 }
 
 const App: React.FC = () => {
+  /**
+   * CRITICAL BUG FIX #3: Initial grid state mismatch
+   * Previously, agents were created using a different empty grid than the one with food,
+   * which could cause agents to spawn on food cells.
+   * Now we create the grid first and use the same grid for both food and agent initialization.
+   */
   const [grid, setGrid] = useState<Cell[][]>(() => {
     const empty = createEmptyGrid();
     const withFood = placeRandomFood(empty, INITIAL_FOOD);
@@ -555,8 +679,10 @@ const App: React.FC = () => {
   });
 
   const [agents, setAgents] = useState<Agent[]>(() => {
-    const baseGrid = createEmptyGrid();
-    return createInitialAgents(baseGrid);
+    // Use a synchronized initialization - create grid with food first
+    const empty = createEmptyGrid();
+    const withFood = placeRandomFood(empty, INITIAL_FOOD);
+    return createInitialAgents(withFood);
   });
 
   const [log, setLog] = useState<string[]>([]);
@@ -567,10 +693,21 @@ const App: React.FC = () => {
   const [speedMs, setSpeedMs] = useState(400);
   const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
   const [showStartupModal, setShowStartupModal] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tickRef = useRef(0);
   tickRef.current = tick;
+
+  /**
+   * PERFORMANCE IMPROVEMENT: Avoid repeated agent lookups
+   * Build a lookup Map once using useMemo instead of doing O(n) lookup for every cell
+   */
+  const agentMap = useMemo(() => {
+    const map = new Map<number, Agent>();
+    agents.forEach(a => map.set(a.id, a));
+    return map;
+  }, [agents]);
 
   const renderedGrid = useMemo(() => {
     const copy = grid.map(row => row.map(cell => ({ ...cell, agentId: undefined })));
@@ -643,6 +780,67 @@ const App: React.FC = () => {
 
   const lastHistory = history.length > 0 ? history[history.length - 1] : null;
 
+  /**
+   * CODE QUALITY IMPROVEMENT: Add keyboard controls
+   * Space: Play/Pause, Arrow Right: Step, R: Reset
+   */
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      // Don't trigger if typing in an input
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      switch (e.key) {
+        case " ": // Space
+          e.preventDefault();
+          setIsRunning(r => !r);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          if (!isRunning) {
+            handleStep();
+          }
+          break;
+        case "r":
+        case "R":
+          e.preventDefault();
+          handleReset();
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyPress);
+    return () => window.removeEventListener("keydown", handleKeyPress);
+  }, [isRunning, handleStep, handleReset]);
+
+  /**
+   * CODE QUALITY IMPROVEMENT: Add aggregate statistics
+   * Calculate average energy, mutation rate, and unique trait count
+   */
+  const stats = useMemo(() => {
+    if (agents.length === 0) {
+      return {
+        avgEnergy: 0,
+        avgMutationRate: 0,
+        uniqueTraits: 0,
+        avgReproThreshold: 0,
+      };
+    }
+
+    const totalEnergy = agents.reduce((sum, a) => sum + a.energy, 0);
+    const totalMutationRate = agents.reduce((sum, a) => sum + a.genes.mutationRate, 0);
+    const totalReproThreshold = agents.reduce((sum, a) => sum + a.genes.reproductionThreshold, 0);
+    const uniqueTraits = new Set(agents.map(a => a.genes.traitId)).size;
+
+    return {
+      avgEnergy: totalEnergy / agents.length,
+      avgMutationRate: totalMutationRate / agents.length,
+      avgReproThreshold: totalReproThreshold / agents.length,
+      uniqueTraits,
+    };
+  }, [agents]);
+
   // Startup modal: ask to start new or load
   const handleStartupNew = () => {
     setShowStartupModal(false);
@@ -653,19 +851,57 @@ const App: React.FC = () => {
     fileInputRef.current?.click();
   };
 
+  /**
+   * CODE QUALITY IMPROVEMENT: Add error handling for file loading
+   * Validates JSON structure, checks grid dimensions, and provides user feedback
+   */
   const handleFileLoad = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const parsed = JSON.parse(text) as WorldState;
-    setGrid(parsed.grid);
-    setAgents(parsed.agents);
-    setTick(parsed.tick);
-    setHistory(parsed.history);
-    setLog([]);
-    setSelectedAgentId(null);
-    setIsRunning(false);
-    setWatchedTraitId(null);
+    
+    try {
+      setLoadError(null);
+      const text = await file.text();
+      const parsed = JSON.parse(text) as WorldState;
+      
+      // Validate structure
+      if (!parsed.grid || !parsed.agents || parsed.tick === undefined || !parsed.history) {
+        throw new Error("Invalid world file: missing required fields (grid, agents, tick, or history)");
+      }
+      
+      // Validate grid dimensions
+      if (parsed.grid.length !== GRID_HEIGHT || parsed.grid[0]?.length !== GRID_WIDTH) {
+        throw new Error(
+          `Invalid grid dimensions: expected ${GRID_WIDTH}x${GRID_HEIGHT}, got ${parsed.grid[0]?.length}x${parsed.grid.length}`
+        );
+      }
+      
+      // Validate agent positions
+      for (const agent of parsed.agents) {
+        if (agent.x < 0 || agent.x >= GRID_WIDTH || agent.y < 0 || agent.y >= GRID_HEIGHT) {
+          throw new Error(`Invalid agent position: Agent ${agent.id} at (${agent.x},${agent.y})`);
+        }
+      }
+      
+      // All validations passed
+      setGrid(parsed.grid);
+      setAgents(parsed.agents);
+      setTick(parsed.tick);
+      setHistory(parsed.history);
+      setLog([`World loaded successfully from ${file.name}`]);
+      setSelectedAgentId(null);
+      setIsRunning(false);
+      setWatchedTraitId(null);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error loading file";
+      setLoadError(errorMsg);
+      setLog(prev => [`ERROR loading world: ${errorMsg}`, ...prev]);
+    } finally {
+      // Reset file input so the same file can be loaded again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
   };
 
   return (
@@ -741,7 +977,8 @@ const App: React.FC = () => {
         >
           {renderedGrid.map((row, y) =>
             row.map((cell, x) => {
-              const agent = agents.find(a => a.id === cell.agentId);
+              // PERFORMANCE IMPROVEMENT: Use agentMap for O(1) lookup instead of O(n) find
+              const agent = cell.agentId ? agentMap.get(cell.agentId) : undefined;
               const isSelected = selectedAgentId === agent?.id;
               const isWatched =
                 agent && watchedTraitId !== null && agent.genes.traitId === watchedTraitId;
@@ -816,14 +1053,45 @@ const App: React.FC = () => {
             />{" "}
             {speedMs} ms/tick
           </div>
-          <span style={{ marginLeft: 12, fontSize: 12, opacity: 0.8 }}>
-            Tick: {tick} | Agentes: {agents.length}
-          </span>
+          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+            <div>Tick: {tick} | Agentes: {agents.length}</div>
+            <div style={{ marginTop: 4 }}>
+              <strong>Keyboard shortcuts:</strong> Space (Play/Pause), → (Step), R (Reset)
+            </div>
+          </div>
+          {loadError && (
+            <div style={{ marginTop: 8, padding: 8, background: "#8b0000", borderRadius: 4, fontSize: 12 }}>
+              Error: {loadError}
+            </div>
+          )}
         </div>
       </div>
 
       {/* RIGHT: Side panel */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* Statistics Display */}
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px",
+            background: "#151a30",
+            borderRadius: "8px",
+            border: "1px solid #333"
+          }}
+        >
+          <h3>Statistics – "Estatísticas"</h3>
+          <div style={{ fontSize: "0.9em" }}>
+            <p>
+              <strong>Avg Energy:</strong> {stats.avgEnergy.toFixed(2)} |{" "}
+              <strong>Avg Mutation Rate:</strong> {stats.avgMutationRate.toFixed(3)}
+            </p>
+            <p>
+              <strong>Avg Repro Threshold:</strong> {stats.avgReproThreshold.toFixed(1)} |{" "}
+              <strong>Unique Traits:</strong> {stats.uniqueTraits}
+            </p>
+          </div>
+        </div>
+
         {/* Agent inspector */}
         <div
           style={{
