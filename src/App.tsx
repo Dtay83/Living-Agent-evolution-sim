@@ -205,27 +205,27 @@ function generateInvention(agent: Agent, tick: number, inventionNumber: number):
   let description: string;
   
   if (effectRoll < 0.4) {
-    // Energy efficiency - scales with creativity
-    const multiplier = 0.95 - (creativityFactor * 0.25); // 0.7 to 0.95
+    // Energy efficiency - scales with creativity (ACTIVE EFFECT)
+    const multiplier = 0.95 - (creativityFactor * 0.25); // 0.7 to 0.95 range
     effect = { type: 'energy_efficiency', multiplier: Math.max(0.5, multiplier) };
     description = `Reduces energy cost by ${Math.round((1 - multiplier) * 100)}%`;
   } else if (effectRoll < 0.7) {
-    // Reproduction boost - scales with creativity
+    // Reproduction boost - scales with creativity (ACTIVE EFFECT)
     const bonus = Math.ceil(2 + creativityFactor * 8); // 2 to 10 bonus
     effect = { type: 'reproduction_boost', bonus };
     description = `+${bonus} bonus energy for reproduction`;
   } else if (effectRoll < 0.85) {
-    // Food detection range - scales with exploration
+    // Food detection range - scales with exploration (PARTIAL: Function exists, not integrated in decision logic)
     const range = Math.ceil(1 + agent.genes.exploration * 3); // 1 to 4 range
     effect = { type: 'food_detection_range', range };
     description = `Detect food ${range} cells away`;
   } else if (effectRoll < 0.95) {
-    // Storage capacity - scales with patience
+    // Storage capacity - scales with patience (FUTURE: Awaiting game mechanic implementation)
     const capacity = Math.ceil(5 + agent.genes.patience * 20); // 5 to 25 capacity
     effect = { type: 'storage', capacity };
     description = `Store ${capacity} extra energy`;
   } else {
-    // Defense - scales with both genes
+    // Defense - scales with both genes (FUTURE: Awaiting damage system implementation)
     const protection = Math.min(0.5, 0.1 + creativityFactor * 0.4); // 0.1 to 0.5
     effect = { type: 'defense', protection };
     description = `${Math.round(protection * 100)}% chance to avoid energy loss`;
