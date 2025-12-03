@@ -1,0 +1,30 @@
+
+---
+
+## 3️⃣ `docs/Worlds.md` – track saved universes
+
+Create `docs/Worlds.md` and paste:
+
+```markdown
+# Worlds Index – Saved JSON Universes
+
+This file tracks every saved world JSON so you know what each file represents.
+
+---
+
+## Template
+
+For each saved world, add:
+
+```text
+World ID: WORLD-YYYYMMDD-XX
+Filename: world_tick_XXXX.json
+Created on: 2025-12-03
+Tick at save: 240
+
+Short description:
+- e.g. "High-diversity world, many small families"
+- or "Single dominant traitId, near population crash"
+
+Related Experiment:
+- EXP-YYYYMMDD-XX (if linked to an experiment)
