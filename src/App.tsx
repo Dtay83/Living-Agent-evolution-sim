@@ -192,7 +192,15 @@ function createInitialAgents(grid: Cell[][]): Agent[] {
   return agents;
 }
 
-// Mutation helper: slightly nudge a value with probability
+/**
+ * Mutation helper: slightly nudge a value with probability
+ * @param base - The base value to potentially mutate
+ * @param mutationRate - Probability (0-1) that mutation occurs
+ * @param magnitude - Maximum amount the value can change (both positive and negative)
+ * @param min - Minimum allowed value after mutation
+ * @param max - Maximum allowed value after mutation
+ * @returns The potentially mutated value, clamped to [min, max]
+ */
 function mutateValue(
   base: number,
   mutationRate: number,
@@ -420,6 +428,10 @@ function stepWorld(
   for (const { agent, newPos, decision, stateKey } of agentMoves) {
     const destKey = `${newPos.x},${newPos.y}`;
     
+    // Track the final position (may change due to collision)
+    let finalX = newPos.x;
+    let finalY = newPos.y;
+    
     // Check if another agent already claimed this destination
     if (destinationMap.has(destKey)) {
       // Collision detected - agent stays in place
@@ -427,14 +439,14 @@ function stepWorld(
         `Agent ${agent.id} collision at (${newPos.x},${newPos.y}), stayed at (${agent.x},${agent.y})`
       );
       // Use original position
-      newPos.x = agent.x;
-      newPos.y = agent.y;
+      finalX = agent.x;
+      finalY = agent.y;
     } else {
       destinationMap.set(destKey, agent.id);
     }
 
     let newEnergy = agent.energy - CONFIG.simulation.baseEnergyCost;
-    const cell = newGrid[newPos.y][newPos.x];
+    const cell = newGrid[finalY][finalX];
     let ateFood = false;
 
     if (cell.food) {
@@ -448,8 +460,8 @@ function stepWorld(
 
     let parentAgent: Agent = {
       ...agent,
-      x: newPos.x,
-      y: newPos.y,
+      x: finalX,
+      y: finalY,
       energy: newEnergy,
       lastRule: decision.rule
     };
@@ -460,10 +472,10 @@ function stepWorld(
 
     if (parentAgent.energy > reproThreshold) {
       const neighborSpots = [
-        { x: newPos.x, y: newPos.y - 1 },
-        { x: newPos.x, y: newPos.y + 1 },
-        { x: newPos.x - 1, y: newPos.y },
-        { x: newPos.x + 1, y: newPos.y }
+        { x: finalX, y: finalY - 1 },
+        { x: finalX, y: finalY + 1 },
+        { x: finalX - 1, y: finalY },
+        { x: finalX + 1, y: finalY }
       ].filter(
         p =>
           p.x >= 0 &&
@@ -506,7 +518,7 @@ function stepWorld(
 
     // RL UPDATE
     const newStateKey = getStateKey(
-      { ...parentAgent, x: newPos.x, y: newPos.y },
+      { ...parentAgent, x: finalX, y: finalY },
       newGrid
     );
     const oldQ = getQ(parentAgent.memory.qTable, stateKey, decision.action);
@@ -535,7 +547,7 @@ function stepWorld(
     } else {
       reward -= CONFIG.simulation.deathPenalty;
       logs.push(
-        `Agent ${agent.id} ran out of energia at (${newPos.x},${newPos.y}) and was removed.`
+        `Agent ${agent.id} ran out of energia at (${finalX},${finalY}) and was removed.`
       );
     }
   }
@@ -559,10 +571,14 @@ function stepWorld(
  */
 const traitColorCache = new Map<number, string>();
 
+// Constants for color generation
+const TRAIT_COLOR_SATURATION = 70;
+const TRAIT_COLOR_LIGHTNESS = 55;
+
 function colorForTrait(traitId: number): string {
   if (!traitColorCache.has(traitId)) {
     const hue = traitId % 360;
-    traitColorCache.set(traitId, `hsl(${hue}, 70%, 55%)`);
+    traitColorCache.set(traitId, `hsl(${hue}, ${TRAIT_COLOR_SATURATION}%, ${TRAIT_COLOR_LIGHTNESS}%)`);
   }
   return traitColorCache.get(traitId)!;
 }
@@ -665,25 +681,28 @@ function downloadWorld(state: WorldState) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * REFACTOR: Shared initialization function
+ * Creates a fresh world state with food and agents to avoid duplication
+ */
+function initializeWorld(): { grid: Cell[][]; agents: Agent[] } {
+  const empty = createEmptyGrid();
+  const withFood = placeRandomFood(empty, INITIAL_FOOD);
+  const agents = createInitialAgents(withFood);
+  return { grid: withFood, agents };
+}
+
 const App: React.FC = () => {
   /**
    * CRITICAL BUG FIX #3: Initial grid state mismatch
    * Previously, agents were created using a different empty grid than the one with food,
    * which could cause agents to spawn on food cells.
-   * Now we create the grid first and use the same grid for both food and agent initialization.
+   * Now we use a shared initialization function to ensure consistency.
    */
-  const [grid, setGrid] = useState<Cell[][]>(() => {
-    const empty = createEmptyGrid();
-    const withFood = placeRandomFood(empty, INITIAL_FOOD);
-    return withFood;
-  });
-
-  const [agents, setAgents] = useState<Agent[]>(() => {
-    // Use a synchronized initialization - create grid with food first
-    const empty = createEmptyGrid();
-    const withFood = placeRandomFood(empty, INITIAL_FOOD);
-    return createInitialAgents(withFood);
-  });
+  const initialWorld = useMemo(() => initializeWorld(), []);
+  
+  const [grid, setGrid] = useState<Cell[][]>(initialWorld.grid);
+  const [agents, setAgents] = useState<Agent[]>(initialWorld.agents);
 
   const [log, setLog] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
@@ -756,10 +775,8 @@ const App: React.FC = () => {
   }, [agents, renderedGrid, pushHistory]);
 
   const handleReset = () => {
-    const empty = createEmptyGrid();
-    const withFood = placeRandomFood(empty, INITIAL_FOOD);
-    const newAgents = createInitialAgents(withFood);
-    setGrid(withFood);
+    const { grid: newGrid, agents: newAgents } = initializeWorld();
+    setGrid(newGrid);
     setAgents(newAgents);
     setLog([]);
     setSelectedAgentId(null);
