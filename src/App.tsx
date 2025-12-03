@@ -13,8 +13,8 @@ interface Genes {
   // NEW: Learning & invention genes
   curiosity: number;             // 0–1: likelihood of discovering new things
   social: number;                // 0–1: ability to teach/learn from others
-  creativity: number;            // 0–1: chance of combining inventions into new ones
-  patience: number;              // 0–1: willingness to invest energy in long-term payoffs
+  creativity: number;            // 0–1: chance of combining inventions into new ones (FUTURE: not yet implemented)
+  patience: number;              // 0–1: willingness to invest energy in long-term payoffs (FUTURE: not yet implemented)
 }
 
 interface Memory {
@@ -38,8 +38,8 @@ type InventionEffect =
   | { type: 'energy_efficiency'; multiplier: number }
   | { type: 'food_detection_range'; range: number }
   | { type: 'reproduction_boost'; bonus: number }
-  | { type: 'defense'; protection: number }
-  | { type: 'storage'; capacity: number };
+  | { type: 'defense'; protection: number }  // FUTURE: not yet integrated with game mechanics
+  | { type: 'storage'; capacity: number };   // FUTURE: not yet integrated with game mechanics
 
 interface Invention {
   id: string;
@@ -588,6 +588,8 @@ function getMovementCost(agent: Agent): number {
 
 /**
  * Get the food detection range for an agent.
+ * FUTURE: This helper is ready but not yet integrated into decision-making logic.
+ * In Phase 3, this would be used to detect food beyond adjacent cells.
  */
 function getFoodDetectionRange(agent: Agent): number {
   let range = 1; // Base range (adjacent cells)
@@ -963,8 +965,8 @@ const DiscoveryTimeline: React.FC<{ discoveries: DiscoveryEvent[] }> = ({ discov
         <p style={{ fontSize: "0.9em", opacity: 0.8 }}>No discoveries yet. Agents with high curiosity may invent things!</p>
       ) : (
         <ul style={{ paddingLeft: "18px", fontSize: "0.85em" }}>
-          {recent.map((d, i) => (
-            <li key={i} style={{ marginBottom: 4 }}>
+          {recent.map((d) => (
+            <li key={`${d.tick}-${d.agentId}-${d.invention.id}`} style={{ marginBottom: 4 }}>
               Tick {d.tick}: Agent {d.agentId} discovered <strong>{d.invention.name}</strong>
             </li>
           ))}
