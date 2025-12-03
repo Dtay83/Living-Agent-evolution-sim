@@ -9,10 +9,53 @@ interface Genes {
   reproductionThreshold: number; // energia needed to reproduce
   mutationRate: number;          // 0–1: chance each gene mutates
   traitId: number;               // lineage / random trait marker
+  
+  // NEW: Learning & invention genes
+  curiosity: number;             // 0–1: likelihood of discovering new things
+  social: number;                // 0–1: ability to teach/learn from others
+  creativity: number;            // 0–1: chance of combining inventions into new ones
+  patience: number;              // 0–1: willingness to invest energy in long-term payoffs
 }
 
 interface Memory {
   qTable: Record<string, number>; // RL value table: (state|action) -> Q
+}
+
+/**
+ * INVENTION SYSTEM
+ * 
+ * Agents can discover "inventions" that provide gameplay advantages.
+ * Discovery is influenced by:
+ * - Energy level (need cognitive surplus)
+ * - Curiosity gene (higher = more likely to discover)
+ * - Prerequisites (tech tree structure)
+ * 
+ * Inventions can be passed to offspring based on the social gene,
+ * simulating cultural/knowledge transmission.
+ */
+
+type InventionEffect = 
+  | { type: 'energy_efficiency'; multiplier: number }
+  | { type: 'food_detection_range'; range: number }
+  | { type: 'reproduction_boost'; bonus: number }
+  | { type: 'defense'; protection: number }
+  | { type: 'storage'; capacity: number };
+
+interface Invention {
+  id: string;
+  name: string;
+  type: 'tool' | 'technique' | 'structure';
+  effect: InventionEffect;
+  discoveredAt: number;      // tick when invented
+  discoveredBy: number;      // agent ID
+  requirements: string[];    // prerequisites to use
+  description?: string;      // human-readable description
+}
+
+interface DiscoveryEvent {
+  tick: number;
+  agentId: number;
+  invention: Invention;
 }
 
 interface Agent {
@@ -23,6 +66,7 @@ interface Agent {
   genes: Genes;
   memory: Memory;
   lastRule?: string;
+  inventions: Invention[];  // Things this agent has discovered
 }
 
 interface Cell {
@@ -41,6 +85,7 @@ interface WorldState {
   agents: Agent[];
   tick: number;
   history: HistoryPoint[];
+  discoveries: DiscoveryEvent[];  // NEW: Track all discoveries
 }
 
 /**
@@ -72,11 +117,19 @@ const CONFIG = {
     exploration: { min: 0.3, max: 0.8 },
     reproductionThreshold: { min: 15, max: 23 },
     mutationRate: { min: 0.1, max: 0.3 },
+    curiosity: { min: 0.2, max: 0.8 },
+    social: { min: 0.3, max: 0.9 },
+    creativity: { min: 0.1, max: 0.7 },
+    patience: { min: 0.2, max: 0.8 },
     mutation: {
       foodPreferenceMagnitude: 0.15,
       explorationMagnitude: 0.2,
       reproductionThresholdMagnitude: 3,
       mutationRateMagnitude: 0.05,
+      curiosityMagnitude: 0.15,
+      socialMagnitude: 0.15,
+      creativityMagnitude: 0.15,
+      patienceMagnitude: 0.15,
       newTraitChance: 0.08,
       mutationRateEvolveMin: 0.01,
       mutationRateEvolveMax: 0.6,
@@ -99,6 +152,63 @@ const INITIAL_FOOD = CONFIG.simulation.initialFood;
 const ALPHA = CONFIG.rl.alpha;
 const GAMMA = CONFIG.rl.gamma;
 const EPSILON = CONFIG.rl.epsilon;
+
+/**
+ * Tech Tree: Discoverable Inventions
+ * 
+ * Defines all inventions that agents can discover during simulation.
+ * Some inventions have prerequisites that must be discovered first.
+ */
+const DISCOVERABLE_INVENTIONS = [
+  {
+    id: 'efficient_foraging',
+    name: 'Efficient Foraging',
+    type: 'technique' as const,
+    effect: { type: 'energy_efficiency' as const, multiplier: 0.8 },
+    requirements: [],
+    description: 'Reduces energy cost of movement by 20%',
+  },
+  {
+    id: 'keen_senses',
+    name: 'Keen Senses', 
+    type: 'technique' as const,
+    effect: { type: 'food_detection_range' as const, range: 2 },
+    requirements: [],
+    description: 'Can detect food 2 cells away instead of 1',
+  },
+  {
+    id: 'food_cache',
+    name: 'Food Storage',
+    type: 'structure' as const, 
+    effect: { type: 'storage' as const, capacity: 10 },
+    requirements: ['efficient_foraging'],
+    description: 'Can store excess energy for later',
+  },
+  {
+    id: 'pack_tactics',
+    name: 'Pack Tactics',
+    type: 'technique' as const,
+    effect: { type: 'reproduction_boost' as const, bonus: 3 },
+    requirements: [],
+    description: 'Bonus energy when reproducing near allies',
+  },
+  {
+    id: 'thick_skin',
+    name: 'Thick Skin',
+    type: 'tool' as const,
+    effect: { type: 'defense' as const, protection: 0.3 },
+    requirements: [],
+    description: '30% chance to avoid energy loss',
+  },
+  {
+    id: 'agriculture',
+    name: 'Food Cultivation',
+    type: 'structure' as const,
+    effect: { type: 'reproduction_boost' as const, bonus: 5 },
+    requirements: ['food_cache', 'efficient_foraging'],
+    description: 'Advanced technique requiring multiple prerequisites',
+  },
+];
 
 /**
  * TYPE SAFETY IMPROVEMENT: Direction movement deltas mapping
@@ -164,7 +274,12 @@ function createRandomGenes(): Genes {
     exploration: CONFIG.genes.exploration.min + Math.random() * (CONFIG.genes.exploration.max - CONFIG.genes.exploration.min),
     reproductionThreshold: CONFIG.genes.reproductionThreshold.min + Math.random() * (CONFIG.genes.reproductionThreshold.max - CONFIG.genes.reproductionThreshold.min),
     mutationRate: CONFIG.genes.mutationRate.min + Math.random() * (CONFIG.genes.mutationRate.max - CONFIG.genes.mutationRate.min),
-    traitId: randomTraitId()
+    traitId: randomTraitId(),
+    // NEW: Learning & invention genes
+    curiosity: CONFIG.genes.curiosity.min + Math.random() * (CONFIG.genes.curiosity.max - CONFIG.genes.curiosity.min),
+    social: CONFIG.genes.social.min + Math.random() * (CONFIG.genes.social.max - CONFIG.genes.social.min),
+    creativity: CONFIG.genes.creativity.min + Math.random() * (CONFIG.genes.creativity.max - CONFIG.genes.creativity.min),
+    patience: CONFIG.genes.patience.min + Math.random() * (CONFIG.genes.patience.max - CONFIG.genes.patience.min),
   };
 }
 
@@ -186,7 +301,8 @@ function createInitialAgents(grid: Cell[][]): Agent[] {
       energy: CONFIG.energy.initialMin + randomInt(CONFIG.energy.initialMax - CONFIG.energy.initialMin),
       genes: createRandomGenes(),
       memory: { qTable: {} },
-      lastRule: "none"
+      lastRule: "none",
+      inventions: []  // NEW: Start with no inventions
     });
   }
   return agents;
@@ -253,6 +369,39 @@ function mutateGenes(parent: Genes): Genes {
     CONFIG.genes.mutation.mutationRateEvolveMax
   );
 
+  // NEW: Mutate learning & invention genes
+  const curiosity = mutateValue(
+    parent.curiosity,
+    mutationRate,
+    CONFIG.genes.mutation.curiosityMagnitude,
+    0.0,
+    1.0
+  );
+
+  const social = mutateValue(
+    parent.social,
+    mutationRate,
+    CONFIG.genes.mutation.socialMagnitude,
+    0.0,
+    1.0
+  );
+
+  const creativity = mutateValue(
+    parent.creativity,
+    mutationRate,
+    CONFIG.genes.mutation.creativityMagnitude,
+    0.0,
+    1.0
+  );
+
+  const patience = mutateValue(
+    parent.patience,
+    mutationRate,
+    CONFIG.genes.mutation.patienceMagnitude,
+    0.0,
+    1.0
+  );
+
   // sometimes spawn a totally new traitId => random trait generation
   const traitId =
     Math.random() < CONFIG.genes.mutation.newTraitChance ? randomTraitId() : parent.traitId;
@@ -262,7 +411,11 @@ function mutateGenes(parent: Genes): Genes {
     exploration,
     reproductionThreshold,
     mutationRate: newMutationRate,
-    traitId
+    traitId,
+    curiosity,
+    social,
+    creativity,
+    patience,
   };
 }
 
@@ -378,6 +531,92 @@ function decideMove(
 }
 
 /**
+ * Check if an agent discovers a new invention this tick.
+ * Discovery is based on:
+ * - Having enough "cognitive surplus" (energy)
+ * - Curiosity gene
+ * - Prerequisites being met
+ * - Random chance
+ */
+function checkForDiscovery(
+  agent: Agent, 
+  tick: number
+): Invention | null {
+  // Only agents with enough energy can invent (cognitive surplus)
+  if (agent.energy < 15) return null;
+  
+  // Discovery chance based on curiosity gene
+  const discoveryChance = agent.genes.curiosity * 0.02;
+  if (Math.random() > discoveryChance) return null;
+
+  // Find inventions this agent could discover
+  const knownIds = new Set(agent.inventions.map(i => i.id));
+  const available = DISCOVERABLE_INVENTIONS.filter(inv => {
+    // Not already known
+    if (knownIds.has(inv.id)) return false;
+    // Prerequisites met
+    return inv.requirements.every(req => knownIds.has(req));
+  });
+
+  if (available.length === 0) return null;
+
+  // Random selection from available inventions
+  const template = available[Math.floor(Math.random() * available.length)];
+  
+  return { 
+    ...template, 
+    discoveredAt: tick, 
+    discoveredBy: agent.id 
+  };
+}
+
+/**
+ * Calculate the actual energy cost for movement based on inventions.
+ */
+function getMovementCost(agent: Agent): number {
+  let cost = 1; // Base cost
+  
+  // Check for energy efficiency inventions
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'energy_efficiency') {
+      cost *= inv.effect.multiplier;
+    }
+  }
+  
+  return Math.max(0.5, cost); // Minimum cost of 0.5
+}
+
+/**
+ * Get the food detection range for an agent.
+ */
+function getFoodDetectionRange(agent: Agent): number {
+  let range = 1; // Base range (adjacent cells)
+  
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'food_detection_range') {
+      range = Math.max(range, inv.effect.range);
+    }
+  }
+  
+  return range;
+}
+
+/**
+ * Get reproduction bonus from inventions.
+ */
+function getReproductionBonus(agent: Agent): number {
+  let bonus = 0;
+  
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'reproduction_boost') {
+      bonus += inv.effect.bonus;
+    }
+  }
+  
+  return bonus;
+}
+
+/**
  * Apply one simulation step, including reproduction + mutation + RL updates
  * 
  * CRITICAL BUG FIX #2: Added collision detection
@@ -385,14 +624,16 @@ function decideMove(
  */
 function stepWorld(
   agents: Agent[],
-  grid: Cell[][]
-): { agents: Agent[]; grid: Cell[][]; log: string[] } {
+  grid: Cell[][],
+  tick: number
+): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[] } {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
   );
 
   const logs: string[] = [];
   const updatedAgents: Agent[] = [];
+  const discoveries: DiscoveryEvent[] = [];
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -445,7 +686,9 @@ function stepWorld(
       destinationMap.set(destKey, agent.id);
     }
 
-    let newEnergy = agent.energy - CONFIG.simulation.baseEnergyCost;
+    // Apply energy cost with invention effects
+    const movementCost = getMovementCost(agent);
+    let newEnergy = agent.energy - movementCost;
     const cell = newGrid[finalY][finalX];
     let ateFood = false;
 
@@ -466,11 +709,32 @@ function stepWorld(
       lastRule: decision.rule
     };
 
+    // Check for invention discovery
+    const discovery = checkForDiscovery(parentAgent, tick);
+    if (discovery) {
+      parentAgent = {
+        ...parentAgent,
+        inventions: [...parentAgent.inventions, discovery]
+      };
+      discoveries.push({
+        tick,
+        agentId: parentAgent.id,
+        invention: discovery
+      });
+      logs.push(
+        `Agent ${parentAgent.id} discovered ${discovery.name}! (tick ${tick})`
+      );
+    }
+
     // REPRODUCTION
     const reproThreshold = parentAgent.genes.reproductionThreshold;
     let reproduced = false;
 
-    if (parentAgent.energy > reproThreshold) {
+    // Apply reproduction bonus from inventions
+    const reproBonus = getReproductionBonus(parentAgent);
+    const effectiveEnergy = parentAgent.energy + reproBonus;
+
+    if (effectiveEnergy > reproThreshold) {
       const neighborSpots = [
         { x: finalX, y: finalY - 1 },
         { x: finalX, y: finalY + 1 },
@@ -493,6 +757,12 @@ function stepWorld(
         parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
 
         const childGenes = mutateGenes(parentAgent.genes);
+        
+        // Inheritance: children can inherit parent's inventions based on social gene
+        const inheritedInventions = parentAgent.inventions.filter(
+          inv => Math.random() < parentAgent.genes.social * 0.8
+        );
+        
         const child: Agent = {
           id: nextId++,
           x: spot.x,
@@ -500,7 +770,12 @@ function stepWorld(
           energy: childEnergy,
           genes: childGenes,
           memory: { qTable: {} },
-          lastRule: 'Born (memória genética + "Mutation")'
+          lastRule: 'Born (memória genética + "Mutation")',
+          inventions: inheritedInventions.map(inv => ({
+            ...inv,
+            // Mark as inherited, not discovered by this agent
+            discoveredBy: parentAgent.id,
+          })),
         };
 
         newGrid[spot.y][spot.x].agentId = child.id;
@@ -510,8 +785,11 @@ function stepWorld(
         reward += CONFIG.simulation.reproductionReward;
         reproduced = true;
 
+        const inheritMsg = inheritedInventions.length > 0 
+          ? ` inherited ${inheritedInventions.length} inventions`
+          : '';
         logs.push(
-          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}`
+          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}${inheritMsg}`
         );
       }
     }
@@ -559,10 +837,10 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs };
+    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs };
+  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries };
 }
 
 /**
@@ -668,6 +946,75 @@ const TraitChart: React.FC<{
   );
 };
 
+// Discovery timeline showing recent inventions
+const DiscoveryTimeline: React.FC<{ discoveries: DiscoveryEvent[] }> = ({ discoveries }) => {
+  const recent = discoveries.slice(-10).reverse();
+  
+  return (
+    <div style={{
+      marginBottom: "12px",
+      padding: "10px",
+      background: "#151a30",
+      borderRadius: "8px",
+      border: "1px solid #333"
+    }}>
+      <h3>🔬 Discovery Timeline</h3>
+      {recent.length === 0 ? (
+        <p style={{ fontSize: "0.9em", opacity: 0.8 }}>No discoveries yet. Agents with high curiosity may invent things!</p>
+      ) : (
+        <ul style={{ paddingLeft: "18px", fontSize: "0.85em" }}>
+          {recent.map((d, i) => (
+            <li key={i} style={{ marginBottom: 4 }}>
+              Tick {d.tick}: Agent {d.agentId} discovered <strong>{d.invention.name}</strong>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+};
+
+// Tech tree visualization
+const TechTree: React.FC<{ 
+  allInventions: typeof DISCOVERABLE_INVENTIONS;
+  discoveredIds: Set<string>;
+}> = ({ allInventions, discoveredIds }) => {
+  return (
+    <div style={{
+      marginBottom: "12px",
+      padding: "10px",
+      background: "#151a30",
+      borderRadius: "8px",
+      border: "1px solid #333"
+    }}>
+      <h3>🌳 Tech Tree</h3>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {allInventions.map(inv => {
+          const isDiscovered = discoveredIds.has(inv.id);
+          const prereqsMet = inv.requirements.every(r => discoveredIds.has(r));
+          
+          return (
+            <div 
+              key={inv.id}
+              style={{
+                padding: 8,
+                borderRadius: 6,
+                background: isDiscovered ? '#2e7d32' : prereqsMet ? '#1a237e' : '#424242',
+                opacity: isDiscovered ? 1 : prereqsMet ? 0.8 : 0.5,
+                fontSize: 12,
+              }}
+              title={`${inv.description}\nRequires: ${inv.requirements.join(', ') || 'None'}`}
+            >
+              {inv.name}
+              {isDiscovered && ' ✓'}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 // Download world state as JSON ("guardar"/"speichere")
 function downloadWorld(state: WorldState) {
   const blob = new Blob([JSON.stringify(state)], {
@@ -708,6 +1055,7 @@ const App: React.FC = () => {
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [discoveries, setDiscoveries] = useState<DiscoveryEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [speedMs, setSpeedMs] = useState(400);
   const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
@@ -762,15 +1110,17 @@ const App: React.FC = () => {
   }, []);
 
   const handleStep = useCallback(() => {
-    const { agents: newAgents, grid: newGrid, log: newLog } = stepWorld(
+    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
       agents,
-      renderedGrid
+      renderedGrid,
+      tickRef.current
     );
     const newTick = tickRef.current + 1;
     setTick(newTick);
     setAgents(newAgents);
     setGrid(newGrid);
     setLog(prev => [...newLog, ...prev].slice(0, 80));
+    setDiscoveries(prev => [...prev, ...newDiscoveries]);
     pushHistory(newAgents, newTick);
   }, [agents, renderedGrid, pushHistory]);
 
@@ -782,6 +1132,7 @@ const App: React.FC = () => {
     setSelectedAgentId(null);
     setTick(0);
     setHistory([]);
+    setDiscoveries([]);
     setIsRunning(false);
     setWatchedTraitId(null);
   };
@@ -796,6 +1147,17 @@ const App: React.FC = () => {
   }, [isRunning, speedMs, handleStep]);
 
   const lastHistory = history.length > 0 ? history[history.length - 1] : null;
+
+  // Calculate discovered invention IDs across all agents
+  const discoveredIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const agent of agents) {
+      for (const inv of agent.inventions) {
+        ids.add(inv.id);
+      }
+    }
+    return ids;
+  }, [agents]);
 
   /**
    * CODE QUALITY IMPROVEMENT: Add keyboard controls
@@ -886,6 +1248,9 @@ const App: React.FC = () => {
         throw new Error("Invalid world file: missing required fields (grid, agents, tick, or history)");
       }
       
+      // discoveries is optional for backwards compatibility
+      const parsedDiscoveries = parsed.discoveries || [];
+      
       // Validate grid dimensions
       if (parsed.grid.length !== GRID_HEIGHT || parsed.grid[0]?.length !== GRID_WIDTH) {
         throw new Error(
@@ -905,6 +1270,7 @@ const App: React.FC = () => {
       setAgents(parsed.agents);
       setTick(parsed.tick);
       setHistory(parsed.history);
+      setDiscoveries(parsedDiscoveries);
       setLog([`World loaded successfully from ${file.name}`]);
       setSelectedAgentId(null);
       setIsRunning(false);
@@ -1047,7 +1413,7 @@ const App: React.FC = () => {
           </button>
           <button onClick={handleReset}>Reset World</button>
           <button
-            onClick={() => downloadWorld({ grid, agents, tick, history })}
+            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries })}
             style={{ marginLeft: 8 }}
           >
             Save World (JSON)
@@ -1143,7 +1509,27 @@ const App: React.FC = () => {
                 reproThresh={selectedAgent.genes.reproductionThreshold.toFixed(1)},{" "}
                 mutationRate={selectedAgent.genes.mutationRate.toFixed(2)}
                 <br />
+                {/* NEW GENES */}
+                curiosity={selectedAgent.genes.curiosity.toFixed(2)},{" "}
+                social={selectedAgent.genes.social.toFixed(2)},{" "}
+                creativity={selectedAgent.genes.creativity.toFixed(2)},{" "}
+                patience={selectedAgent.genes.patience.toFixed(2)}
+                <br />
                 traitId={selectedAgent.genes.traitId}
+              </p>
+              <p>
+                <strong>Inventions ({selectedAgent.inventions.length}):</strong>
+                {selectedAgent.inventions.length === 0 ? (
+                  <span> None yet</span>
+                ) : (
+                  <ul style={{ paddingLeft: "18px", fontSize: "0.85em", marginTop: 4 }}>
+                    {selectedAgent.inventions.map(inv => (
+                      <li key={inv.id}>
+                        {inv.name} - {inv.description || inv.effect.type}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </p>
             </>
           ) : (
@@ -1215,6 +1601,15 @@ const App: React.FC = () => {
             onSelectTrait={tid => setWatchedTraitId(tid)}
           />
         </div>
+
+        {/* Discovery Timeline */}
+        <DiscoveryTimeline discoveries={discoveries} />
+
+        {/* Tech Tree */}
+        <TechTree 
+          allInventions={DISCOVERABLE_INVENTIONS}
+          discoveredIds={discoveredIds}
+        />
 
         {/* Log */}
         <div
