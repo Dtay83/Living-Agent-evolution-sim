@@ -13,8 +13,8 @@ interface Genes {
   // NEW: Learning & invention genes
   curiosity: number;             // 0–1: likelihood of discovering new things
   social: number;                // 0–1: ability to teach/learn from others
-  creativity: number;            // 0–1: chance of combining inventions into new ones (FUTURE: not yet implemented)
-  patience: number;              // 0–1: willingness to invest energy in long-term payoffs (FUTURE: not yet implemented)
+  creativity: number;            // 0–1: scales the quality and power of discovered inventions
+  patience: number;              // 0–1: influences storage capacity and long-term benefits
 }
 
 interface Memory {
@@ -38,8 +38,8 @@ type InventionEffect =
   | { type: 'energy_efficiency'; multiplier: number }
   | { type: 'food_detection_range'; range: number }
   | { type: 'reproduction_boost'; bonus: number }
-  | { type: 'defense'; protection: number }  // FUTURE: not yet integrated with game mechanics
-  | { type: 'storage'; capacity: number };   // FUTURE: not yet integrated with game mechanics
+  | { type: 'defense'; protection: number }
+  | { type: 'storage'; capacity: number };
 
 interface Invention {
   id: string;
@@ -67,6 +67,7 @@ interface Agent {
   memory: Memory;
   lastRule?: string;
   inventions: Invention[];  // Things this agent has discovered
+  inventionPoints: number;  // Accumulated creativity points for discovering new inventions
 }
 
 interface Cell {
@@ -154,61 +155,93 @@ const GAMMA = CONFIG.rl.gamma;
 const EPSILON = CONFIG.rl.epsilon;
 
 /**
- * Tech Tree: Discoverable Inventions
+ * LIMITLESS INVENTION SYSTEM
  * 
- * Defines all inventions that agents can discover during simulation.
- * Some inventions have prerequisites that must be discovered first.
+ * Instead of a fixed tech tree, inventions are procedurally generated based on:
+ * - Agent's creativity and curiosity genes
+ * - Invention points accumulated through exploration and survival
+ * - Random inspiration that creates unique, emergent inventions
+ * 
+ * This allows for unlimited creativity with no cap on discoveries.
  */
-const DISCOVERABLE_INVENTIONS = [
-  {
-    id: 'efficient_foraging',
-    name: 'Efficient Foraging',
-    type: 'technique' as const,
-    effect: { type: 'energy_efficiency' as const, multiplier: 0.8 },
-    requirements: [],
-    description: 'Reduces energy cost of movement by 20%',
-  },
-  {
-    id: 'keen_senses',
-    name: 'Keen Senses', 
-    type: 'technique' as const,
-    effect: { type: 'food_detection_range' as const, range: 2 },
-    requirements: [],
-    description: 'Can detect food 2 cells away instead of 1',
-  },
-  {
-    id: 'food_cache',
-    name: 'Food Storage',
-    type: 'structure' as const, 
-    effect: { type: 'storage' as const, capacity: 10 },
-    requirements: ['efficient_foraging'],
-    description: 'Can store excess energy for later',
-  },
-  {
-    id: 'pack_tactics',
-    name: 'Pack Tactics',
-    type: 'technique' as const,
-    effect: { type: 'reproduction_boost' as const, bonus: 3 },
-    requirements: [],
-    description: 'Bonus energy when reproducing near allies',
-  },
-  {
-    id: 'thick_skin',
-    name: 'Thick Skin',
-    type: 'tool' as const,
-    effect: { type: 'defense' as const, protection: 0.3 },
-    requirements: [],
-    description: '30% chance to avoid energy loss',
-  },
-  {
-    id: 'agriculture',
-    name: 'Food Cultivation',
-    type: 'structure' as const,
-    effect: { type: 'reproduction_boost' as const, bonus: 5 },
-    requirements: ['food_cache', 'efficient_foraging'],
-    description: 'Advanced technique requiring multiple prerequisites',
-  },
+
+// Invention name components for procedural generation
+const INVENTION_PREFIXES = [
+  'Efficient', 'Advanced', 'Enhanced', 'Optimized', 'Swift', 'Powerful',
+  'Refined', 'Masterful', 'Superior', 'Elite', 'Expert', 'Precise',
+  'Strategic', 'Tactical', 'Innovative', 'Revolutionary', 'Adaptive', 'Dynamic'
 ];
+
+const INVENTION_THEMES = [
+  'Foraging', 'Hunting', 'Gathering', 'Navigation', 'Communication',
+  'Defense', 'Offense', 'Survival', 'Cooperation', 'Efficiency',
+  'Awareness', 'Adaptation', 'Endurance', 'Speed', 'Strength',
+  'Intelligence', 'Memory', 'Reflexes', 'Instinct', 'Wisdom'
+];
+
+const INVENTION_TYPES: Array<'tool' | 'technique' | 'structure'> = [
+  'tool', 'technique', 'structure'
+];
+
+/**
+ * Generate a unique invention based on agent's capabilities and random inspiration
+ */
+function generateInvention(agent: Agent, tick: number, inventionNumber: number): Invention {
+  // Use agent's creativity to influence invention quality
+  const creativityFactor = agent.genes.curiosity * agent.genes.creativity;
+  
+  // Random invention type
+  const type = INVENTION_TYPES[Math.floor(Math.random() * INVENTION_TYPES.length)];
+  
+  // Generate unique name based on invention number and random elements
+  const prefix = INVENTION_PREFIXES[Math.floor(Math.random() * INVENTION_PREFIXES.length)];
+  const theme = INVENTION_THEMES[Math.floor(Math.random() * INVENTION_THEMES.length)];
+  const name = `${prefix} ${theme}`;
+  const id = `invention_${agent.id}_${inventionNumber}_${tick}`;
+  
+  // Determine effect type based on creativity and randomness
+  const effectRoll = Math.random();
+  let effect: InventionEffect;
+  let description: string;
+  
+  if (effectRoll < 0.4) {
+    // Energy efficiency - scales with creativity
+    const multiplier = 0.95 - (creativityFactor * 0.25); // 0.7 to 0.95
+    effect = { type: 'energy_efficiency', multiplier: Math.max(0.5, multiplier) };
+    description = `Reduces energy cost by ${Math.round((1 - multiplier) * 100)}%`;
+  } else if (effectRoll < 0.7) {
+    // Reproduction boost - scales with creativity
+    const bonus = Math.ceil(2 + creativityFactor * 8); // 2 to 10 bonus
+    effect = { type: 'reproduction_boost', bonus };
+    description = `+${bonus} bonus energy for reproduction`;
+  } else if (effectRoll < 0.85) {
+    // Food detection range - scales with exploration
+    const range = Math.ceil(1 + agent.genes.exploration * 3); // 1 to 4 range
+    effect = { type: 'food_detection_range', range };
+    description = `Detect food ${range} cells away`;
+  } else if (effectRoll < 0.95) {
+    // Storage capacity - scales with patience
+    const capacity = Math.ceil(5 + agent.genes.patience * 20); // 5 to 25 capacity
+    effect = { type: 'storage', capacity };
+    description = `Store ${capacity} extra energy`;
+  } else {
+    // Defense - scales with both genes
+    const protection = Math.min(0.5, 0.1 + creativityFactor * 0.4); // 0.1 to 0.5
+    effect = { type: 'defense', protection };
+    description = `${Math.round(protection * 100)}% chance to avoid energy loss`;
+  }
+  
+  return {
+    id,
+    name,
+    type,
+    effect,
+    discoveredAt: tick,
+    discoveredBy: agent.id,
+    requirements: [], // No prerequisites in limitless system
+    description
+  };
+}
 
 /**
  * TYPE SAFETY IMPROVEMENT: Direction movement deltas mapping
@@ -302,7 +335,8 @@ function createInitialAgents(grid: Cell[][]): Agent[] {
       genes: createRandomGenes(),
       memory: { qTable: {} },
       lastRule: "none",
-      inventions: []  // NEW: Start with no inventions
+      inventions: [],  // NEW: Start with no inventions
+      inventionPoints: 0  // NEW: Start with no invention points
     });
   }
   return agents;
@@ -532,41 +566,56 @@ function decideMove(
 
 /**
  * Check if an agent discovers a new invention this tick.
- * Discovery is based on:
- * - Having enough "cognitive surplus" (energy)
- * - Curiosity gene
- * - Prerequisites being met
- * - Random chance
+ * 
+ * LIMITLESS DISCOVERY SYSTEM:
+ * - Agents accumulate "invention points" through exploration and survival
+ * - Points are spent to generate new, unique inventions
+ * - Discovery is influenced by curiosity and creativity genes
+ * - No cap on number of inventions - agents can discover infinitely
+ * - Each invention is procedurally generated with effects scaled to agent's abilities
  */
 function checkForDiscovery(
   agent: Agent, 
   tick: number
-): Invention | null {
-  // Only agents with enough energy can invent (cognitive surplus)
-  if (agent.energy < 15) return null;
+): { invention: Invention | null; updatedAgent: Agent } {
+  // Agents gain invention points based on curiosity and exploration
+  // Points represent accumulated knowledge, experience, and inspiration
+  const pointGain = agent.genes.curiosity * agent.genes.exploration * 0.5;
+  let newPoints = agent.inventionPoints + pointGain;
   
-  // Discovery chance based on curiosity gene
-  const discoveryChance = agent.genes.curiosity * 0.02;
-  if (Math.random() > discoveryChance) return null;
-
-  // Find inventions this agent could discover
-  const knownIds = new Set(agent.inventions.map(i => i.id));
-  const available = DISCOVERABLE_INVENTIONS.filter(inv => {
-    // Not already known
-    if (knownIds.has(inv.id)) return false;
-    // Prerequisites met
-    return inv.requirements.every(req => knownIds.has(req));
-  });
-
-  if (available.length === 0) return null;
-
-  // Random selection from available inventions
-  const template = available[Math.floor(Math.random() * available.length)];
+  // Only agents with enough energy can invent (cognitive surplus)
+  if (agent.energy < 15) {
+    return { 
+      invention: null, 
+      updatedAgent: { ...agent, inventionPoints: newPoints }
+    };
+  }
+  
+  // Discovery chance increases with curiosity and creativity
+  const creativityBoost = agent.genes.creativity;
+  const discoveryChance = agent.genes.curiosity * 0.03 * (1 + creativityBoost);
+  
+  // Also consider accumulated invention points as inspiration
+  const inspirationBonus = Math.min(0.02, newPoints * 0.001);
+  const totalChance = discoveryChance + inspirationBonus;
+  
+  if (Math.random() > totalChance) {
+    return { 
+      invention: null, 
+      updatedAgent: { ...agent, inventionPoints: newPoints }
+    };
+  }
+  
+  // Discovery! Generate a unique invention
+  const inventionNumber = agent.inventions.length + 1;
+  const invention = generateInvention(agent, tick, inventionNumber);
+  
+  // Spend some invention points on the discovery (but not all)
+  newPoints = Math.max(0, newPoints - 5);
   
   return { 
-    ...template, 
-    discoveredAt: tick, 
-    discoveredBy: agent.id 
+    invention, 
+    updatedAgent: { ...agent, inventionPoints: newPoints }
   };
 }
 
@@ -712,19 +761,21 @@ function stepWorld(
     };
 
     // Check for invention discovery
-    const discovery = checkForDiscovery(parentAgent, tick);
-    if (discovery) {
+    const discoveryResult = checkForDiscovery(parentAgent, tick);
+    parentAgent = discoveryResult.updatedAgent; // Update with new invention points
+    
+    if (discoveryResult.invention) {
       parentAgent = {
         ...parentAgent,
-        inventions: [...parentAgent.inventions, discovery]
+        inventions: [...parentAgent.inventions, discoveryResult.invention]
       };
       discoveries.push({
         tick,
         agentId: parentAgent.id,
-        invention: discovery
+        invention: discoveryResult.invention
       });
       logs.push(
-        `Agent ${parentAgent.id} discovered ${discovery.name}! (tick ${tick})`
+        `Agent ${parentAgent.id} discovered ${discoveryResult.invention.name}! (${discoveryResult.invention.description})`
       );
     }
 
@@ -765,6 +816,9 @@ function stepWorld(
           inv => Math.random() < parentAgent.genes.social * 0.8
         );
         
+        // Children inherit a portion of parent's invention points (learning from parent)
+        const inheritedPoints = parentAgent.inventionPoints * parentAgent.genes.social * 0.3;
+        
         const child: Agent = {
           id: nextId++,
           x: spot.x,
@@ -778,6 +832,7 @@ function stepWorld(
             // Mark as inherited, not discovered by this agent
             discoveredBy: parentAgent.id,
           })),
+          inventionPoints: inheritedPoints, // NEW: Inherit some creativity points
         };
 
         newGrid[spot.y][spot.x].agentId = child.id;
@@ -948,9 +1003,9 @@ const TraitChart: React.FC<{
   );
 };
 
-// Discovery timeline showing recent inventions
+// Discovery timeline showing recent inventions with details
 const DiscoveryTimeline: React.FC<{ discoveries: DiscoveryEvent[] }> = ({ discoveries }) => {
-  const recent = discoveries.slice(-10).reverse();
+  const recent = discoveries.slice(-15).reverse();
   
   return (
     <div style={{
@@ -960,14 +1015,25 @@ const DiscoveryTimeline: React.FC<{ discoveries: DiscoveryEvent[] }> = ({ discov
       borderRadius: "8px",
       border: "1px solid #333"
     }}>
-      <h3>🔬 Discovery Timeline</h3>
+      <h3>🔬 Discovery Timeline (Limitless Creativity)</h3>
+      <p style={{ fontSize: "0.85em", opacity: 0.8, marginBottom: 8 }}>
+        Total Discoveries: <strong>{discoveries.length}</strong> | No cap on inventions!
+      </p>
       {recent.length === 0 ? (
-        <p style={{ fontSize: "0.9em", opacity: 0.8 }}>No discoveries yet. Agents with high curiosity may invent things!</p>
+        <p style={{ fontSize: "0.9em", opacity: 0.8 }}>
+          No discoveries yet. Agents accumulate invention points through exploration and curiosity. 
+          High creativity allows for more powerful inventions!
+        </p>
       ) : (
-        <ul style={{ paddingLeft: "18px", fontSize: "0.85em" }}>
+        <ul style={{ paddingLeft: "18px", fontSize: "0.8em", maxHeight: 250, overflowY: "auto" }}>
           {recent.map((d) => (
-            <li key={`${d.tick}-${d.agentId}-${d.invention.id}`} style={{ marginBottom: 4 }}>
-              Tick {d.tick}: Agent {d.agentId} discovered <strong>{d.invention.name}</strong>
+            <li key={`${d.tick}-${d.agentId}-${d.invention.id}`} style={{ marginBottom: 6 }}>
+              <strong>Tick {d.tick}</strong>: Agent {d.agentId} discovered{" "}
+              <strong style={{ color: "#4caf50" }}>{d.invention.name}</strong>
+              <br />
+              <span style={{ opacity: 0.8, fontSize: "0.9em" }}>
+                ({d.invention.type}) - {d.invention.description}
+              </span>
             </li>
           ))}
         </ul>
@@ -976,11 +1042,22 @@ const DiscoveryTimeline: React.FC<{ discoveries: DiscoveryEvent[] }> = ({ discov
   );
 };
 
-// Tech tree visualization
-const TechTree: React.FC<{ 
-  allInventions: typeof DISCOVERABLE_INVENTIONS;
-  discoveredIds: Set<string>;
-}> = ({ allInventions, discoveredIds }) => {
+// Invention Statistics showing creativity metrics
+const InventionStats: React.FC<{ 
+  agents: Agent[];
+  discoveries: DiscoveryEvent[];
+}> = ({ agents, discoveries }) => {
+  const totalInventions = discoveries.length;
+  const avgInventionsPerAgent = agents.length > 0 
+    ? agents.reduce((sum, a) => sum + a.inventions.length, 0) / agents.length 
+    : 0;
+  const mostInventive = agents.length > 0
+    ? agents.reduce((max, a) => a.inventions.length > max.inventions.length ? a : max, agents[0])
+    : null;
+  const avgCreativity = agents.length > 0
+    ? agents.reduce((sum, a) => sum + a.genes.creativity, 0) / agents.length
+    : 0;
+  
   return (
     <div style={{
       marginBottom: "12px",
@@ -989,29 +1066,22 @@ const TechTree: React.FC<{
       borderRadius: "8px",
       border: "1px solid #333"
     }}>
-      <h3>🌳 Tech Tree</h3>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-        {allInventions.map(inv => {
-          const isDiscovered = discoveredIds.has(inv.id);
-          const prereqsMet = inv.requirements.every(r => discoveredIds.has(r));
-          
-          return (
-            <div 
-              key={inv.id}
-              style={{
-                padding: 8,
-                borderRadius: 6,
-                background: isDiscovered ? '#2e7d32' : prereqsMet ? '#1a237e' : '#424242',
-                opacity: isDiscovered ? 1 : prereqsMet ? 0.8 : 0.5,
-                fontSize: 12,
-              }}
-              title={`${inv.description}\nRequires: ${inv.requirements.join(', ') || 'None'}`}
-            >
-              {inv.name}
-              {isDiscovered && ' ✓'}
-            </div>
-          );
-        })}
+      <h3>💡 Invention Statistics</h3>
+      <div style={{ fontSize: "0.85em" }}>
+        <p>
+          <strong>Total Unique Inventions:</strong> {totalInventions} (Unlimited!)
+        </p>
+        <p>
+          <strong>Avg Inventions per Agent:</strong> {avgInventionsPerAgent.toFixed(1)}
+        </p>
+        <p>
+          <strong>Avg Creativity:</strong> {avgCreativity.toFixed(2)}
+        </p>
+        {mostInventive && (
+          <p>
+            <strong>Most Inventive Agent:</strong> #{mostInventive.id} with {mostInventive.inventions.length} inventions
+          </p>
+        )}
       </div>
     </div>
   );
@@ -1149,17 +1219,6 @@ const App: React.FC = () => {
   }, [isRunning, speedMs, handleStep]);
 
   const lastHistory = history.length > 0 ? history[history.length - 1] : null;
-
-  // Calculate discovered invention IDs across all agents
-  const discoveredIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const agent of agents) {
-      for (const inv of agent.inventions) {
-        ids.add(inv.id);
-      }
-    }
-    return ids;
-  }, [agents]);
 
   /**
    * CODE QUALITY IMPROVEMENT: Add keyboard controls
@@ -1500,6 +1559,13 @@ const App: React.FC = () => {
                 <strong>Energia:</strong> {selectedAgent.energy}
               </p>
               <p>
+                <strong>Invention Points:</strong> {selectedAgent.inventionPoints.toFixed(1)}
+                <br />
+                <span style={{ fontSize: "0.85em", opacity: 0.8 }}>
+                  (Accumulated through exploration & curiosity, used to inspire new inventions)
+                </span>
+              </p>
+              <p>
                 <strong>Last Rule ("Regra" / "Regle"):</strong>{" "}
                 {selectedAgent.lastRule}
               </p>
@@ -1607,11 +1673,8 @@ const App: React.FC = () => {
         {/* Discovery Timeline */}
         <DiscoveryTimeline discoveries={discoveries} />
 
-        {/* Tech Tree */}
-        <TechTree 
-          allInventions={DISCOVERABLE_INVENTIONS}
-          discoveredIds={discoveredIds}
-        />
+        {/* Invention Statistics */}
+        <InventionStats agents={agents} discoveries={discoveries} />
 
         {/* Log */}
         <div
