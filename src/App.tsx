@@ -21,18 +21,27 @@ interface Agent {
   id: number;
   x: number;
   y: number;
-  energy: number; // "energia"
+  energy: number;
   sex: "M" | "F";
   ageTicks: number;
   genes: Genes;
   memory: Memory;
   lastRule?: string;
+  // Pregnancy/reproduction state
+  pregnantWith?: {
+    mateId: number;
+    gestationTicks: number;
+    childGenes: Genes;
+  };
+  reproductionCooldown?: number; // ticks until can reproduce again
+  // Visual state
+  lastDirection?: Direction;
 }
 
 interface Cell {
   food: boolean;
   agentId?: number;
-  terrain: "plain" | "water" | "rich";
+  terrain: "plain" | "water" | "rich" | "hazard";
 }
 
 interface HistoryPoint {
@@ -112,6 +121,18 @@ const CONFIG = {
     maxReproAgeYears: 120,   // oldest reproductive age
     maxAgeYears: 200         // lifespan limit
   },
+  reproduction: {
+    gestationTicks: 4,       // ticks for pregnancy to complete
+    cooldownTicks: 6,        // ticks before can reproduce again
+    energyCostRatio: 0.33,   // portion of combined energy given to child
+  },
+  terrain: {
+    hazardDamage: 1,         // extra energy cost per tick on hazard
+    richFoodBonus: 2,        // extra energy from food on rich terrain
+    waterSpawnChance: 0.05,  // % of cells that are water
+    richSpawnChance: 0.10,   // % of cells that are rich
+    hazardSpawnChance: 0.03, // % of cells that are hazard
+  },
 } as const;
 
 // Backwards compatibility aliases
@@ -162,17 +183,19 @@ function randomInt(max: number) {
 
 /**
  * Add random terrain to the grid
- * ~5% water cells, ~10% rich cells
+ * Includes water, rich soil, and hazard terrain
  */
 function addRandomTerrain(grid: Cell[][]): Cell[][] {
   const copy = grid.map(row => row.map(cell => ({ ...cell })));
   for (let y = 0; y < GRID_HEIGHT; y++) {
     for (let x = 0; x < GRID_WIDTH; x++) {
       const roll = Math.random();
-      if (roll < 0.05) {
+      if (roll < CONFIG.terrain.waterSpawnChance) {
         copy[y][x].terrain = "water";
-      } else if (roll < 0.15) {
+      } else if (roll < CONFIG.terrain.waterSpawnChance + CONFIG.terrain.richSpawnChance) {
         copy[y][x].terrain = "rich";
+      } else if (roll < CONFIG.terrain.waterSpawnChance + CONFIG.terrain.richSpawnChance + CONFIG.terrain.hazardSpawnChance) {
+        copy[y][x].terrain = "hazard";
       }
     }
   }
@@ -666,13 +689,19 @@ function stepWorld(
     let ateFood = false;
     let richBonus = 0;
 
+    // Hazard terrain causes extra energy drain
+    if (cell.terrain === "hazard") {
+      newEnergy -= CONFIG.terrain.hazardDamage;
+      logs.push(`Agent ${agent.id} takes ${CONFIG.terrain.hazardDamage} hazard damage at (${finalX},${finalY})`);
+    }
+
     if (cell.food) {
       ateFood = true;
       cell.food = false;
       newEnergy += CONFIG.simulation.foodEnergyBonus;
       // Rich terrain gives extra energy when eating food
       if (cell.terrain === "rich") {
-        richBonus = 2;
+        richBonus = CONFIG.terrain.richFoodBonus;
         newEnergy += richBonus;
       }
     }
@@ -684,6 +713,11 @@ function stepWorld(
     const newAgeTicks = (agent.ageTicks ?? 0) + 1;
     const ageYears = newAgeTicks * CONFIG.time.yearsPerTick;
 
+    // Decrement reproduction cooldown
+    const newCooldown = agent.reproductionCooldown 
+      ? Math.max(0, agent.reproductionCooldown - 1) 
+      : 0;
+
     let parentAgent: Agent = {
       ...agent,
       x: finalX,
@@ -691,10 +725,93 @@ function stepWorld(
       energy: newEnergy,
       lastRule: decision.rule,
       ageTicks: newAgeTicks,
+      lastDirection: decision.dir,
+      reproductionCooldown: newCooldown,
+      pregnantWith: agent.pregnantWith, // carry forward pregnancy state
     };
 
-    // REPRODUCTION (Sexual - requires opposite-sex mate)
-    let reproduced = false;
+    // PROCESS PREGNANCY - Check if gestation complete
+    let gaveBirth = false;
+    const currentPregnancy = parentAgent.pregnantWith;
+    if (currentPregnancy) {
+      const gestation = currentPregnancy.gestationTicks + 1;
+      
+      if (gestation >= CONFIG.reproduction.gestationTicks) {
+        // Time to give birth! Find a spot for the child
+        const adjacentPositions = [
+          { x: finalX, y: finalY - 1 },
+          { x: finalX, y: finalY + 1 },
+          { x: finalX - 1, y: finalY },
+          { x: finalX + 1, y: finalY }
+        ].filter(
+          p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
+        );
+
+        const birthSpots = adjacentPositions.filter(
+          p =>
+            newGrid[p.y][p.x].agentId === undefined &&
+            newGrid[p.y][p.x].terrain !== "water" &&
+            !destinationMap.has(`${p.x},${p.y}`)
+        );
+
+        if (birthSpots.length > 0) {
+          const spot = birthSpots[randomInt(birthSpots.length)];
+          
+          // Child gets portion of mother's current energy
+          const childEnergy = Math.floor(parentAgent.energy * 0.4);
+          parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
+
+          const child: Agent = {
+            id: nextId++,
+            x: spot.x,
+            y: spot.y,
+            energy: childEnergy,
+            sex: Math.random() < 0.5 ? "M" : "F",
+            ageTicks: 0,
+            genes: currentPregnancy.childGenes,
+            memory: { qTable: { ...parentAgent.memory.qTable } }, // inherit genetic memory
+            lastRule: 'Born',
+            reproductionCooldown: 0,
+          };
+
+          newGrid[spot.y][spot.x].agentId = child.id;
+          destinationMap.set(`${spot.x},${spot.y}`, child.id);
+          updatedAgents.push(child);
+
+          logs.push(
+            `🍼 Agent ${parentAgent.id}(${parentAgent.sex}) gave birth to ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}`
+          );
+
+          gaveBirth = true;
+          reward += CONFIG.simulation.reproductionReward;
+        } else {
+          // No space - pregnancy continues (difficult birth)
+          parentAgent = {
+            ...parentAgent,
+            pregnantWith: { ...currentPregnancy, gestationTicks: gestation },
+          };
+          logs.push(`Agent ${parentAgent.id} couldn't find space to give birth`);
+        }
+
+        // Clear pregnancy after birth
+        if (gaveBirth) {
+          parentAgent = { 
+            ...parentAgent, 
+            pregnantWith: undefined,
+            reproductionCooldown: CONFIG.reproduction.cooldownTicks,
+          };
+        }
+      } else {
+        // Continue gestation
+        parentAgent = {
+          ...parentAgent,
+          pregnantWith: { ...currentPregnancy, gestationTicks: gestation },
+        };
+      }
+    }
+
+    // REPRODUCTION (Sexual - requires opposite-sex mate) - MATING PHASE
+    let reproduced = gaveBirth;
 
     // Age-based reproduction rules
     const ageYearsForRepro = parentAgent.ageTicks * CONFIG.time.yearsPerTick;
@@ -707,12 +824,19 @@ function stepWorld(
     const riskAdjustment = 1 - 0.3 * (parentAgent.genes.riskTolerance - 0.5);
     const effectiveReproThreshold = parentAgent.genes.reproductionThreshold * riskAdjustment;
 
-    // Check if this agent hasn't already reproduced this tick
-    const canAttemptRepro = !usedForRepro.has(parentAgent.id) && 
+    // Check if this agent can attempt mating:
+    // - Not already used for repro this tick
+    // - Within reproductive age
+    // - Has enough energy
+    // - Not already pregnant
+    // - Not on cooldown
+    const canAttemptMating = !usedForRepro.has(parentAgent.id) && 
       canReproduceByAge && 
-      parentAgent.energy > effectiveReproThreshold;
+      parentAgent.energy > effectiveReproThreshold &&
+      !parentAgent.pregnantWith &&
+      (parentAgent.reproductionCooldown ?? 0) === 0;
 
-    if (canAttemptRepro) {
+    if (canAttemptMating) {
       // Find adjacent agents of opposite sex with sufficient energy
       const adjacentPositions = [
         { x: finalX, y: finalY - 1 },
@@ -739,10 +863,13 @@ function stepWorld(
             const mateRiskAdjustment = 1 - 0.3 * (potentialMate.genes.riskTolerance - 0.5);
             const mateEffectiveThreshold = potentialMate.genes.reproductionThreshold * mateRiskAdjustment;
             
+            // Mate must be opposite sex, fertile age, enough energy, not pregnant, not on cooldown
             if (
               potentialMate.sex !== parentAgent.sex &&
               mateCanReproByAge &&
-              potentialMate.energy > mateEffectiveThreshold
+              potentialMate.energy > mateEffectiveThreshold &&
+              !potentialMate.pregnantWith &&
+              (potentialMate.reproductionCooldown ?? 0) === 0
             ) {
               mate = potentialMate;
               break;
@@ -759,65 +886,75 @@ function stepWorld(
 
         // Roll fertility check - reproduction more likely at prime ages
         if (Math.random() <= combinedFert) {
-          // Find empty spots for child (not water, not occupied)
-          const neighborSpots = adjacentPositions.filter(
-            p =>
-              newGrid[p.y][p.x].agentId === undefined &&
-              newGrid[p.y][p.x].terrain !== "water" &&
-              !destinationMap.has(`${p.x},${p.y}`)
-          );
+          // Mating successful! Determine which parent gets pregnant (female)
+          const female = parentAgent.sex === "F" ? parentAgent : mate;
+          const male = parentAgent.sex === "M" ? parentAgent : mate;
+          
+          // Combine genes from both parents for the future child
+          const childGenes = combineGenes(female.genes, male.genes);
+          
+          // Both parents pay initial energy cost for mating
+          const matingEnergyCost = 2;
+          parentAgent = { ...parentAgent, energy: parentAgent.energy - matingEnergyCost };
+          
+          // Update mate's energy
+          const mateInUpdated = updatedAgents.findIndex(a => a.id === mate!.id);
+          if (mateInUpdated !== -1) {
+            updatedAgents[mateInUpdated] = { 
+              ...updatedAgents[mateInUpdated], 
+              energy: updatedAgents[mateInUpdated].energy - matingEnergyCost 
+            };
+          }
 
-          if (neighborSpots.length > 0) {
-            const spot = neighborSpots[randomInt(neighborSpots.length)];
+          // Mark both parents as having mated this tick
+          usedForRepro.add(parentAgent.id);
+          usedForRepro.add(mate.id);
 
-            // Both parents contribute energy (1/3 of total split between them)
-            const totalEnergy = parentAgent.energy + mate.energy;
-            const childEnergy = Math.floor(totalEnergy / 3);
-            const parentCost = Math.floor(childEnergy / 2);
-            const mateCost = childEnergy - parentCost;
-
-            parentAgent = { ...parentAgent, energy: parentAgent.energy - parentCost };
-
-            // Update mate's energy in the arrays
-            const mateInUpdated = updatedAgents.findIndex(a => a.id === mate!.id);
+          // Set pregnancy on the female
+          if (parentAgent.sex === "F") {
+            parentAgent = {
+              ...parentAgent,
+              pregnantWith: {
+                mateId: male.id,
+                gestationTicks: 0,
+                childGenes,
+              },
+            };
+            logs.push(
+              `💕 Agent ${parentAgent.id}(F) mated with ${male.id}(M) - now pregnant!`
+            );
+          } else {
+            // Parent is male, update the female mate
             if (mateInUpdated !== -1) {
-              updatedAgents[mateInUpdated] = { 
-                ...updatedAgents[mateInUpdated], 
-                energy: updatedAgents[mateInUpdated].energy - mateCost 
+              updatedAgents[mateInUpdated] = {
+                ...updatedAgents[mateInUpdated],
+                pregnantWith: {
+                  mateId: parentAgent.id,
+                  gestationTicks: 0,
+                  childGenes,
+                },
               };
             }
-
-            // Mark both parents as having reproduced this tick
-            usedForRepro.add(parentAgent.id);
-            usedForRepro.add(mate.id);
-
-            // Combine genes from both parents
-            const childGenes = combineGenes(parentAgent.genes, mate.genes);
-
-            // Child inherits qTable from first parent for genetic memory
-            const child: Agent = {
-              id: nextId++,
-              x: spot.x,
-              y: spot.y,
-              energy: childEnergy,
-              sex: Math.random() < 0.5 ? "M" : "F",
-              ageTicks: 0,
-              genes: childGenes,
-              memory: { qTable: { ...parentAgent.memory.qTable } },
-              lastRule: 'Born (sexual reproduction)'
-            };
-
-            newGrid[spot.y][spot.x].agentId = child.id;
-            destinationMap.set(`${spot.x},${spot.y}`, child.id);
-            updatedAgents.push(child);
-
-            reward += CONFIG.simulation.reproductionReward;
-            reproduced = true;
-
             logs.push(
-              `Agent ${parentAgent.id}(${parentAgent.sex}) + ${mate.id}(${mate.sex}) → child ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}, energy ${childEnergy}`
+              `💕 Agent ${female.id}(F) mated with ${parentAgent.id}(M) - now pregnant!`
             );
           }
+
+          // Male goes on cooldown
+          if (parentAgent.sex === "M") {
+            parentAgent = {
+              ...parentAgent,
+              reproductionCooldown: CONFIG.reproduction.cooldownTicks,
+            };
+          } else if (mateInUpdated !== -1) {
+            updatedAgents[mateInUpdated] = {
+              ...updatedAgents[mateInUpdated],
+              reproductionCooldown: CONFIG.reproduction.cooldownTicks,
+            };
+          }
+
+          reproduced = true;
+          reward += 1; // Small reward for successful mating
         }
       }
     }
@@ -915,6 +1052,195 @@ function colorForTrait(traitId: number): string {
   }
   return traitColorCache.get(traitId)!;
 }
+
+/**
+ * AgentAvatar - SVG stick figure representing an agent
+ * Visual indicators for sex, energy level, pregnancy, and direction
+ */
+const AgentAvatar: React.FC<{
+  agent: Agent;
+  size: number;
+  isSelected: boolean;
+  isWatched: boolean;
+}> = ({ agent, size, isSelected, isWatched }) => {
+  const traitColor = colorForTrait(agent.genes.traitId);
+  const ageYears = agent.ageTicks * CONFIG.time.yearsPerTick;
+  
+  // Energy determines body opacity/glow
+  const energyRatio = Math.min(agent.energy / 20, 1);
+  const energyColor = energyRatio > 0.5 
+    ? `rgba(100, 255, 100, ${0.3 + energyRatio * 0.4})` 
+    : `rgba(255, 100, 100, ${0.3 + (1 - energyRatio) * 0.4})`;
+  
+  // Age affects posture (older = slightly bent)
+  const ageFactor = Math.min(ageYears / CONFIG.time.maxAgeYears, 1);
+  const headTilt = ageFactor * 2;
+  
+  // Sex determines body style
+  const isFemale = agent.sex === "F";
+  const isPregnant = agent.pregnantWith !== undefined;
+  
+  // Direction affects leg/arm pose
+  const dir = agent.lastDirection || "stay";
+  const isMoving = dir !== "stay";
+  
+  // Scale everything to fit in the cell
+  const scale = size / 24;
+  
+  return (
+    <svg 
+      width={size} 
+      height={size} 
+      viewBox="0 0 24 24"
+      style={{
+        filter: isSelected 
+          ? "drop-shadow(0 0 4px #ffeb3b)" 
+          : isWatched 
+          ? "drop-shadow(0 0 3px #ff5252)"
+          : `drop-shadow(0 0 2px ${traitColor})`,
+        transition: "all 0.15s ease"
+      }}
+    >
+      {/* Energy glow background */}
+      <circle cx="12" cy="12" r="10" fill={energyColor} opacity="0.3" />
+      
+      {/* Head */}
+      <circle 
+        cx={12 + headTilt} 
+        cy="6" 
+        r={isFemale ? 3.5 : 3} 
+        fill={traitColor}
+        stroke="#fff"
+        strokeWidth="0.5"
+      />
+      
+      {/* Eyes */}
+      <circle cx={11 + headTilt} cy="5.5" r="0.6" fill="#222" />
+      <circle cx={13 + headTilt} cy="5.5" r="0.6" fill="#222" />
+      
+      {/* Body */}
+      <line 
+        x1={12 + headTilt * 0.5} 
+        y1="9" 
+        x2={12 + headTilt} 
+        y2={isFemale ? 14 : 15} 
+        stroke={traitColor}
+        strokeWidth={isFemale ? 2.5 : 2}
+        strokeLinecap="round"
+      />
+      
+      {/* Pregnancy indicator - belly bulge */}
+      {isPregnant && (
+        <ellipse 
+          cx={12 + headTilt * 0.5 + 1} 
+          cy="12" 
+          rx="2.5" 
+          ry="2" 
+          fill={traitColor}
+          stroke="#ffd700"
+          strokeWidth="0.5"
+        />
+      )}
+      
+      {/* Female dress/skirt indicator */}
+      {isFemale && (
+        <polygon 
+          points={`${10 + headTilt},14 ${14 + headTilt},14 ${15 + headTilt},18 ${9 + headTilt},18`}
+          fill={traitColor}
+          opacity="0.8"
+        />
+      )}
+      
+      {/* Arms - animated based on direction */}
+      <line 
+        x1={12 + headTilt * 0.5} 
+        y1="10" 
+        x2={isMoving && (dir === "left" || dir === "up") ? 7 : 8} 
+        y2={isMoving ? 8 : 12} 
+        stroke={traitColor}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <line 
+        x1={12 + headTilt * 0.5} 
+        y1="10" 
+        x2={isMoving && (dir === "right" || dir === "up") ? 17 : 16} 
+        y2={isMoving ? 8 : 12} 
+        stroke={traitColor}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      
+      {/* Legs - animated based on direction */}
+      {!isFemale && (
+        <>
+          <line 
+            x1={12 + headTilt} 
+            y1="15" 
+            x2={isMoving && (dir === "up" || dir === "left") ? 9 : 10} 
+            y2="21" 
+            stroke={traitColor}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <line 
+            x1={12 + headTilt} 
+            y1="15" 
+            x2={isMoving && (dir === "up" || dir === "right") ? 15 : 14} 
+            y2="21" 
+            stroke={traitColor}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </>
+      )}
+      {isFemale && (
+        <>
+          <line 
+            x1={11 + headTilt} 
+            y1="18" 
+            x2={isMoving && dir === "left" ? 8 : 10} 
+            y2="22" 
+            stroke={traitColor}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <line 
+            x1={13 + headTilt} 
+            y1="18" 
+            x2={isMoving && dir === "right" ? 16 : 14} 
+            y2="22" 
+            stroke={traitColor}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </>
+      )}
+      
+      {/* Cooldown indicator (small timer icon) */}
+      {agent.reproductionCooldown && agent.reproductionCooldown > 0 && (
+        <circle 
+          cx="19" 
+          cy="5" 
+          r="3" 
+          fill="rgba(255,100,100,0.8)"
+          stroke="#fff"
+          strokeWidth="0.3"
+        />
+      )}
+      
+      {/* Young indicator (baby icon) */}
+      {ageYears < CONFIG.time.minReproAgeYears && (
+        <text x="2" y="8" fontSize="6" fill="#fff">👶</text>
+      )}
+      
+      {/* Elder indicator */}
+      {ageYears > CONFIG.time.maxReproAgeYears && (
+        <text x="2" y="8" fontSize="5" fill="#fff">👴</text>
+      )}
+    </svg>
+  );
+};
 
 // Simple line chart for population over time
 const PopulationChart: React.FC<{ history: HistoryPoint[] }> = ({ history }) => {
@@ -1306,19 +1632,31 @@ const App: React.FC = () => {
         avgMutationRate: 0,
         uniqueTraits: 0,
         avgReproThreshold: 0,
+        pregnantCount: 0,
+        maleCount: 0,
+        femaleCount: 0,
+        avgAge: 0,
       };
     }
 
     const totalEnergy = agents.reduce((sum, a) => sum + a.energy, 0);
     const totalMutationRate = agents.reduce((sum, a) => sum + a.genes.mutationRate, 0);
     const totalReproThreshold = agents.reduce((sum, a) => sum + a.genes.reproductionThreshold, 0);
+    const totalAge = agents.reduce((sum, a) => sum + a.ageTicks * CONFIG.time.yearsPerTick, 0);
     const uniqueTraits = new Set(agents.map(a => a.genes.traitId)).size;
+    const pregnantCount = agents.filter(a => a.pregnantWith).length;
+    const maleCount = agents.filter(a => a.sex === "M").length;
+    const femaleCount = agents.filter(a => a.sex === "F").length;
 
     return {
       avgEnergy: totalEnergy / agents.length,
       avgMutationRate: totalMutationRate / agents.length,
       avgReproThreshold: totalReproThreshold / agents.length,
       uniqueTraits,
+      pregnantCount,
+      maleCount,
+      femaleCount,
+      avgAge: totalAge / agents.length,
     };
   }, [agents]);
 
@@ -1487,14 +1825,14 @@ const App: React.FC = () => {
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: `repeat(${GRID_WIDTH}, 24px)`,
-              gridTemplateRows: `repeat(${GRID_HEIGHT}, 24px)`,
-              gap: "3px",
-              border: "1px solid #334",
-              padding: "8px",
-              background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
-              borderRadius: 12,
-              boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
+              gridTemplateColumns: `repeat(${GRID_WIDTH}, 32px)`,
+              gridTemplateRows: `repeat(${GRID_HEIGHT}, 32px)`,
+              gap: "2px",
+              border: "2px solid #2a3a5a",
+              padding: "10px",
+              background: "linear-gradient(180deg, #0d1220 0%, #080c18 100%)",
+              borderRadius: 16,
+              boxShadow: "0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)"
             }}
           >
           {renderedGrid.map((row, y) =>
@@ -1505,39 +1843,99 @@ const App: React.FC = () => {
               const isWatched =
                 agent && watchedTraitId !== null && agent.genes.traitId === watchedTraitId;
 
-              // Determine background color based on terrain, food, and agent
-              let bg = "#1f2640"; // plain terrain default
-              if (cell.terrain === "water") bg = "#1e3a5f"; // water - blue
-              else if (cell.terrain === "rich") bg = "#3d2e1f"; // rich - brownish
+              // Determine background color based on terrain
+              let bg = "#1a2035"; // plain terrain default
+              let terrainIcon = "";
+              if (cell.terrain === "water") {
+                bg = "linear-gradient(135deg, #1a4a7a 0%, #0d2840 100%)";
+                terrainIcon = "🌊";
+              } else if (cell.terrain === "rich") {
+                bg = "linear-gradient(135deg, #3d4a2a 0%, #2a3520 100%)";
+              } else if (cell.terrain === "hazard") {
+                bg = "linear-gradient(135deg, #5a2a2a 0%, #3a1a1a 100%)";
+                terrainIcon = "⚠️";
+              }
               
-              if (cell.food) bg = cell.terrain === "rich" ? "#4caf50" : "#2c9c3f"; // brighter green on rich
-              if (agent) bg = colorForTrait(agent.genes.traitId);
-              if (cell.food && agent) bg = "#ffb300";              return (
+              // Food styling
+              if (cell.food && !agent) {
+                bg = cell.terrain === "rich" 
+                  ? "linear-gradient(135deg, #4caf50 0%, #2e7d32 100%)" 
+                  : "linear-gradient(135deg, #66bb6a 0%, #388e3c 100%)";
+              }
+
+              return (
                 <div
                   key={`${x}-${y}`}
                   onClick={() => agent && setSelectedAgentId(agent.id)}
                   style={{
-                    width: "24px",
-                    height: "24px",
-                    borderRadius: "5px",
-                    background: bg,
+                    width: "32px",
+                    height: "32px",
+                    borderRadius: "6px",
+                    background: agent ? "transparent" : bg,
                     border: isSelected
                       ? "2px solid #ffeb3b"
                       : isWatched
                       ? "2px solid #ff5252"
-                      : "1px solid rgba(255,255,255,0.1)",
+                      : "1px solid rgba(255,255,255,0.08)",
                     boxSizing: "border-box",
                     cursor: agent ? "pointer" : "default",
-                    transition: "transform 0.1s ease",
-                    boxShadow: agent ? "0 2px 8px rgba(0,0,0,0.3)" : "none"
+                    transition: "all 0.15s ease",
+                    boxShadow: agent 
+                      ? "inset 0 0 8px rgba(0,0,0,0.3)" 
+                      : cell.food 
+                      ? "0 2px 8px rgba(76,175,80,0.3)"
+                      : "none",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    position: "relative",
+                    overflow: "hidden",
                   }}
                   title={
                     agent
-                      ? `Agent ${agent.id} – energy ${agent.energy}, traitId ${agent.genes.traitId}`
+                      ? `Agent ${agent.id} (${agent.sex}) – energy ${agent.energy}, age ${(agent.ageTicks * CONFIG.time.yearsPerTick).toFixed(0)}y${agent.pregnantWith ? " 🤰" : ""}`
                       : cell.food
-                      ? "Food"
+                      ? `Food${cell.terrain === "rich" ? " (rich soil +bonus)" : ""}`
+                      : cell.terrain !== "plain"
+                      ? `Terrain: ${cell.terrain}`
                       : ""
-                  }                />
+                  }
+                >
+                  {/* Terrain indicator (background) */}
+                  {!agent && !cell.food && terrainIcon && (
+                    <span style={{ fontSize: 12, opacity: 0.5 }}>{terrainIcon}</span>
+                  )}
+                  
+                  {/* Food icon */}
+                  {cell.food && !agent && (
+                    <span style={{ fontSize: 14 }}>🍎</span>
+                  )}
+                  
+                  {/* Agent avatar */}
+                  {agent && (
+                    <AgentAvatar 
+                      agent={agent} 
+                      size={28} 
+                      isSelected={isSelected} 
+                      isWatched={isWatched ?? false}
+                    />
+                  )}
+                  
+                  {/* Agent + food indicator */}
+                  {agent && cell.food && (
+                    <div style={{
+                      position: "absolute",
+                      bottom: 0,
+                      right: 0,
+                      fontSize: 8,
+                      background: "rgba(0,0,0,0.5)",
+                      borderRadius: 2,
+                      padding: "0 2px",
+                    }}>
+                      🍎
+                    </div>
+                  )}
+                </div>
               );
             })
           )}
@@ -1686,22 +2084,42 @@ const App: React.FC = () => {
         <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>Statistics</h3>
-          <div style={{ fontSize: "0.9em" }}>
-            <p>
-              <strong>Avg Energy:</strong> {stats.avgEnergy.toFixed(2)} |{" "}
-              <strong>Avg Mutation Rate:</strong> {stats.avgMutationRate.toFixed(3)}
-            </p>
-            <p>
-              <strong>Avg Repro Threshold:</strong> {stats.avgReproThreshold.toFixed(1)} |{" "}
-              <strong>Unique Traits:</strong> {stats.uniqueTraits}
-            </p>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>📊 Statistics</h3>
+          <div style={{ fontSize: "0.85em", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px" }}>
+            <div>
+              <span style={{ opacity: 0.7 }}>Population:</span>{" "}
+              <strong>{stats.maleCount}♂ + {stats.femaleCount}♀</strong>
+            </div>
+            <div>
+              <span style={{ opacity: 0.7 }}>Pregnant:</span>{" "}
+              <strong style={{ color: stats.pregnantCount > 0 ? "#ffd700" : "inherit" }}>
+                {stats.pregnantCount} 🤰
+              </strong>
+            </div>
+            <div>
+              <span style={{ opacity: 0.7 }}>Avg Energy:</span>{" "}
+              <strong style={{ color: stats.avgEnergy < 8 ? "#ff5252" : "#4caf50" }}>
+                {stats.avgEnergy.toFixed(1)}
+              </strong>
+            </div>
+            <div>
+              <span style={{ opacity: 0.7 }}>Avg Age:</span>{" "}
+              <strong>{stats.avgAge.toFixed(0)}y</strong>
+            </div>
+            <div>
+              <span style={{ opacity: 0.7 }}>Mutation Rate:</span>{" "}
+              <strong>{(stats.avgMutationRate * 100).toFixed(1)}%</strong>
+            </div>
+            <div>
+              <span style={{ opacity: 0.7 }}>Unique Traits:</span>{" "}
+              <strong>{stats.uniqueTraits}</strong>
+            </div>
           </div>
         </div>
 
@@ -1709,13 +2127,13 @@ const App: React.FC = () => {
         <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>Simulation Settings</h3>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>⚙️ Settings</h3>
           <div style={{ fontSize: "0.85em", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
             <label>
               Initial Agents:
@@ -1786,7 +2204,18 @@ const App: React.FC = () => {
           </div>
           <button
             onClick={createWorldFromSettings}
-            style={{ marginTop: 10, width: "100%" }}
+            style={{ 
+              marginTop: 10, 
+              width: "100%",
+              padding: "8px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              background: "linear-gradient(180deg, #4a6cf7 0%, #3b5ce4 100%)",
+              border: "none",
+              borderRadius: 6,
+              color: "#fff",
+              cursor: "pointer"
+            }}
           >
             Create New World with Settings
           </button>
@@ -1794,27 +2223,46 @@ const App: React.FC = () => {
         <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>Agent Inspector</h3>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>🔍 Agent Inspector</h3>
           {selectedAgent ? (
             <>
               <p>
                 <strong>ID:</strong> {selectedAgent.id} | <strong>Sex:</strong> {selectedAgent.sex}
+                {selectedAgent.pregnantWith && <span style={{ marginLeft: 8, color: "#ffd700" }}>🤰 Pregnant</span>}
               </p>
               <p>
                 <strong>Position:</strong> ({selectedAgent.x},{selectedAgent.y})
               </p>              <p>
                 <strong>Energy:</strong> {selectedAgent.energy}
+                {selectedAgent.energy <= 5 && <span style={{ marginLeft: 8, color: "#ff5252" }}>⚠️ Low</span>}
               </p>
               <p>
                 <strong>Age:</strong> {selectedAgent.ageTicks} ticks (~
                 {(selectedAgent.ageTicks * CONFIG.time.yearsPerTick).toFixed(1)} years)
+                {(selectedAgent.ageTicks * CONFIG.time.yearsPerTick) < CONFIG.time.minReproAgeYears && 
+                  <span style={{ marginLeft: 8, color: "#64b5f6" }}>👶 Young</span>}
+                {(selectedAgent.ageTicks * CONFIG.time.yearsPerTick) > CONFIG.time.maxReproAgeYears && 
+                  <span style={{ marginLeft: 8, color: "#9e9e9e" }}>👴 Elder</span>}
               </p>
+              {/* Reproduction status */}
+              {selectedAgent.pregnantWith && (
+                <p style={{ background: "rgba(255,215,0,0.1)", padding: "4px 8px", borderRadius: 4 }}>
+                  <strong>🤰 Gestation:</strong> {selectedAgent.pregnantWith.gestationTicks}/{CONFIG.reproduction.gestationTicks} ticks
+                  <br />
+                  <small>Father: Agent #{selectedAgent.pregnantWith.mateId}</small>
+                </p>
+              )}
+              {selectedAgent.reproductionCooldown && selectedAgent.reproductionCooldown > 0 && (
+                <p style={{ background: "rgba(255,100,100,0.1)", padding: "4px 8px", borderRadius: 4 }}>
+                  <strong>⏳ Cooldown:</strong> {selectedAgent.reproductionCooldown} ticks
+                </p>
+              )}
               <p>
                 <strong>Last Rule:</strong>{" "}
                 {selectedAgent.lastRule}
@@ -1832,59 +2280,65 @@ const App: React.FC = () => {
                 <br />
                 traitId={selectedAgent.genes.traitId}
               </p>
-            </>          ) : (
+            </>) : (
             <p>Click an agent in the grid to inspect its genetic memory.</p>
           )}
         </div>        {/* Rules + RL + evolution description */}
         <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>Behavior, Reinforcement Learning & Evolution</h3>
-          <ul style={{ fontSize: "0.9em" }}>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>🧬 How It Works</h3>
+          <ul style={{ fontSize: "0.8em", margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
             <li>
-              <strong>Hard Rule:</strong> if hungry and food is adjacent, move
-              toward food (survival).
+              <strong>Survival:</strong> Hungry agents seek food. Hazard terrain drains energy.
             </li>
             <li>
-              <strong>RL Policy:</strong> otherwise, a learned policy chooses
-              up/down/left/right/stay to maximize future reward.
+              <strong>Learning:</strong> Q-learning adapts behavior based on rewards.
             </li>
             <li>
-              <strong>Reproduction:</strong> if energy &gt; reproductionThreshold,
-              agent may split energy with a child, whose genes are mutated.
+              <strong>Mating:</strong> Adjacent ♂+♀ with enough energy may mate.
+            </li>
+            <li>
+              <strong>Pregnancy:</strong> Females carry children for {CONFIG.reproduction.gestationTicks} ticks.
+            </li>
+            <li>
+              <strong>Genetics:</strong> Children inherit blended genes with mutations.
+            </li>
+            <li>
+              <strong>Aging:</strong> Fertility peaks at ~28y, death at {CONFIG.time.maxAgeYears}y.
             </li>
           </ul>
-        </div>        {/* Charts */}
+        </div>{/* Charts */}
         <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>Population Over Time</h3>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>📈 Population</h3>
           <PopulationChart history={history} />
         </div>        <div
           style={{
             marginBottom: "12px",
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a"
           }}
         >
-          <h3>
-            Trait Distribution
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>
+            🧬 Trait Distribution
             {watchedTraitId !== null && (
-              <span style={{ fontSize: 12, marginLeft: 8 }}>
+              <span style={{ fontSize: 12, marginLeft: 8, opacity: 0.7 }}>
                 Watching traitId {watchedTraitId}
               </span>
             )}
@@ -1898,19 +2352,20 @@ const App: React.FC = () => {
         <div
           style={{
             flex: 1,
-            padding: "10px",
-            background: "#151a30",
-            borderRadius: "8px",
-            border: "1px solid #333",
-            overflowY: "auto"
+            padding: "12px",
+            background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+            borderRadius: "10px",
+            border: "1px solid #2a3a5a",
+            overflowY: "auto",
+            maxHeight: 200
           }}
         >
-          <h3>Action Log</h3>
+          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>📜 Action Log</h3>
           {log.length === 0 ? (
-            <p>No steps yet. Press "Step" or "Play" to advance the world.</p>
+            <p style={{ opacity: 0.6, fontSize: 13 }}>No steps yet. Press "Step" or "Play" to advance the world.</p>
           ) : (
-            <ul style={{ paddingLeft: "18px" }}>              {log.map((entry, i) => (
-                <li key={i} style={{ fontSize: "0.8em" }}>
+            <ul style={{ paddingLeft: "18px", margin: 0 }}>              {log.map((entry, i) => (
+                <li key={i} style={{ fontSize: "0.75em", opacity: i === 0 ? 1 : 0.7, marginBottom: 2 }}>
                   {entry}
                 </li>
               ))}
