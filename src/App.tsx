@@ -3,6 +3,23 @@ import React, { useState, useMemo, useEffect, useRef, useCallback } from "react"
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
+// Tools and inventions that agents can discover/create
+type ToolType = "none" | "stick" | "stone_tool" | "spear" | "basket" | "fire";
+
+interface Tool {
+  type: ToolType;
+  durability: number; // 0-100, decreases with use
+}
+
+// Knowledge represents discoveries that can be passed down
+interface Knowledge {
+  toolmaking: number;      // 0-1: ability to craft tools
+  firemaking: number;      // 0-1: ability to create/use fire
+  foodStorage: number;     // 0-1: ability to store food efficiently
+  shelterBuilding: number; // 0-1: ability to build shelters
+  hunting: number;         // 0-1: hunting efficiency
+}
+
 interface Genes {
   foodPreference: number;        // 0–1: prioritize food when hungry
   exploration: number;           // 0–1: how often they wander
@@ -11,10 +28,13 @@ interface Genes {
   traitId: number;               // lineage / random trait marker
   riskTolerance: number;         // 0–1: willingness to act with lower energy
   socialDrive: number;           // 0–1: preference for being near other agents
+  intelligence: number;          // 0–1: ability to learn/discover new things
+  creativity: number;            // 0–1: chance to invent new tools/techniques
 }
 
 interface Memory {
   qTable: Record<string, number>; // RL value table: (state|action) -> Q
+  knowledge: Knowledge;           // learned skills and discoveries
 }
 
 interface Agent {
@@ -36,12 +56,26 @@ interface Agent {
   reproductionCooldown?: number; // ticks until can reproduce again
   // Visual state
   lastDirection?: Direction;
+  // Tools and inventory
+  tool?: Tool;
+  storedFood?: number; // food stored (if has basket)
 }
 
 interface Cell {
   food: boolean;
   agentId?: number;
   terrain: "plain" | "water" | "rich" | "hazard";
+  // Structures
+  shelter?: {
+    builderId: number;
+    durability: number;
+  };
+  fire?: {
+    ticksRemaining: number;
+  };
+  // Resources for crafting
+  hasSticks?: boolean;
+  hasStones?: boolean;
 }
 
 interface HistoryPoint {
@@ -78,60 +112,78 @@ const CONFIG = {
   simulation: {
     initialAgents: 8,
     initialFood: 20,
-    foodSpawnChance: 0.75,
-    foodSpawnCount: 2,
-    baseEnergyCost: 1,
-    foodEnergyBonus: 5,
-    reproductionReward: 2,
-    deathPenalty: 5,
+    foodSpawnChance: 0.85,    // increased from 0.75 - more food spawns
+    foodSpawnCount: 3,         // increased from 2 - more food per spawn
+    baseEnergyCost: 0.5,       // reduced from 1 - agents burn energy slower
+    foodEnergyBonus: 8,        // increased from 5 - eating is more rewarding
+    reproductionReward: 8,     // increased from 2 - BIG reward for passing genes
+    matingReward: 3,           // new: reward for successful mating
+    birthReward: 5,            // new: reward for giving birth
+    deathPenalty: 2,           // reduced from 5 - death is less punishing to learning
   },
   rl: {
     alpha: 0.3,   // learning rate
-    gamma: 0.9,   // discount factor
-    epsilon: 0.2, // exploration probability
+    gamma: 0.95,  // increased from 0.9 - value future rewards more (genetic legacy)
+    epsilon: 0.15, // reduced from 0.2 - less random exploration, more learned behavior
   },
   genes: {
     foodPreference: { min: 0.6, max: 1.0 },
     exploration: { min: 0.3, max: 0.8 },
-    reproductionThreshold: { min: 12, max: 20 },
-    mutationRate: { min: 0.1, max: 0.3 },
+    reproductionThreshold: { min: 10, max: 18 }, // lowered to make reproduction easier
+    mutationRate: { min: 0.12, max: 0.35 },      // slightly higher mutation rates
     riskTolerance: { min: 0.2, max: 0.8 },
-    socialDrive: { min: 0.2, max: 0.8 },
+    socialDrive: { min: 0.3, max: 0.9 },         // higher social drive to encourage proximity/mating
     mutation: {
       foodPreferenceMagnitude: 0.15,
       explorationMagnitude: 0.2,
-      reproductionThresholdMagnitude: 3,
-      mutationRateMagnitude: 0.05,
+      reproductionThresholdMagnitude: 2,         // smaller mutations to threshold
+      mutationRateMagnitude: 0.06,               // mutation rate can evolve more
       riskToleranceMagnitude: 0.15,
       socialDriveMagnitude: 0.15,
-      newTraitChance: 0.08,
-      mutationRateEvolveMin: 0.01,
-      mutationRateEvolveMax: 0.6,
-      reproductionThresholdMin: 8,
-      reproductionThresholdMax: 30,
+      intelligenceMagnitude: 0.12,
+      creativityMagnitude: 0.12,
+      newTraitChance: 0.10,                      // increased from 0.08 - more genetic diversity
+      mutationRateEvolveMin: 0.05,               // minimum mutation rate higher
+      mutationRateEvolveMax: 0.5,
+      reproductionThresholdMin: 6,               // can evolve very low threshold
+      reproductionThresholdMax: 25,
     },
+    intelligence: { min: 0.1, max: 0.5 },        // starting intelligence range
+    creativity: { min: 0.1, max: 0.4 },          // starting creativity range
   },energy: {
-    hungryCutoffRatio: 6,
-    initialMin: 10,
-    initialMax: 16,
+    hungryCutoffRatio: 8,      // increased from 6 - seek food earlier
+    initialMin: 15,            // increased from 10 - start with more energy
+    initialMax: 25,            // increased from 16 - start with more energy
   },
   time: {
     yearsPerTick: 0.5,       // conversion from ticks → years
-    minReproAgeYears: 20,    // youngest reproductive age
-    maxReproAgeYears: 120,   // oldest reproductive age
-    maxAgeYears: 200         // lifespan limit
+    minReproAgeYears: 18,    // reduced from 20 - can reproduce earlier
+    maxReproAgeYears: 140,   // increased from 120 - longer fertile period
+    maxAgeYears: 250         // increased from 200 - longer lifespan
   },
   reproduction: {
-    gestationTicks: 4,       // ticks for pregnancy to complete
-    cooldownTicks: 6,        // ticks before can reproduce again
-    energyCostRatio: 0.33,   // portion of combined energy given to child
+    gestationTicks: 3,       // reduced from 4 - faster pregnancy
+    cooldownTicks: 4,        // reduced from 6 - can reproduce more often
+    energyCostRatio: 0.25,   // reduced from 0.33 - cheaper to reproduce
+    matingEnergyCost: 1,     // reduced mating cost
   },
   terrain: {
-    hazardDamage: 1,         // extra energy cost per tick on hazard
-    richFoodBonus: 2,        // extra energy from food on rich terrain
-    waterSpawnChance: 0.05,  // % of cells that are water
-    richSpawnChance: 0.10,   // % of cells that are rich
-    hazardSpawnChance: 0.03, // % of cells that are hazard
+    hazardDamage: 0.5,       // reduced from 1 - hazards less deadly
+    richFoodBonus: 3,        // increased from 2 - rich terrain more valuable
+    waterSpawnChance: 0.04,  // reduced from 0.05 - less water obstacles
+    richSpawnChance: 0.12,   // increased from 0.10 - more rich terrain
+    hazardSpawnChance: 0.02, // reduced from 0.03 - fewer hazards
+    resourceSpawnChance: 0.08, // chance for sticks/stones to spawn
+  },
+  invention: {
+    discoveryChance: 0.02,   // base chance per tick to discover something new
+    toolDurability: 100,     // starting durability for tools
+    shelterProtection: 0.5,  // damage reduction from shelter
+    fireWarmth: 2,           // energy saved per tick near fire
+    fireDuration: 20,        // ticks a fire lasts
+    basketCapacity: 5,       // max food a basket can hold
+    inventionReward: 5,      // RL reward for inventing something
+    knowledgeTransferRate: 0.7, // how much knowledge passes to children
   },
 } as const;
 
@@ -220,6 +272,30 @@ function placeRandomFood(grid: Cell[][], count: number): Cell[][] {
 }
 
 /**
+ * Spawn sticks and stones on the grid for crafting
+ */
+function spawnResources(grid: Cell[][]): Cell[][] {
+  const copy = grid.map(row => row.map(cell => ({ ...cell })));
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      if (copy[y][x].terrain === "water") continue;
+      
+      // Chance to spawn sticks (more common)
+      if (!copy[y][x].hasSticks && Math.random() < CONFIG.terrain.resourceSpawnChance) {
+        copy[y][x].hasSticks = true;
+      }
+      // Chance to spawn stones (less common, prefer plain/hazard terrain)
+      if (!copy[y][x].hasStones && Math.random() < CONFIG.terrain.resourceSpawnChance * 0.6) {
+        if (copy[y][x].terrain === "plain" || copy[y][x].terrain === "hazard") {
+          copy[y][x].hasStones = true;
+        }
+      }
+    }
+  }
+  return copy;
+}
+
+/**
  * Food recycling: remove excess food when there are too few agents
  * This prevents the board from getting overcrowded with food when agents die off
  * @param grid - Current grid state
@@ -274,6 +350,25 @@ function randomTraitId(): number {
   return randomInt(999999);
 }
 
+// Create initial empty knowledge
+function createInitialKnowledge(): Knowledge {
+  return {
+    toolmaking: 0,
+    firemaking: 0,
+    foodStorage: 0,
+    shelterBuilding: 0,
+    hunting: 0,
+  };
+}
+
+// Create initial memory with empty Q-table and knowledge
+function createInitialMemory(): Memory {
+  return {
+    qTable: {},
+    knowledge: createInitialKnowledge(),
+  };
+}
+
 // Initial genes generator
 function createRandomGenes(): Genes {
   return {
@@ -284,6 +379,8 @@ function createRandomGenes(): Genes {
     traitId: randomTraitId(),
     riskTolerance: CONFIG.genes.riskTolerance.min + Math.random() * (CONFIG.genes.riskTolerance.max - CONFIG.genes.riskTolerance.min),
     socialDrive: CONFIG.genes.socialDrive.min + Math.random() * (CONFIG.genes.socialDrive.max - CONFIG.genes.socialDrive.min),
+    intelligence: CONFIG.genes.intelligence.min + Math.random() * (CONFIG.genes.intelligence.max - CONFIG.genes.intelligence.min),
+    creativity: CONFIG.genes.creativity.min + Math.random() * (CONFIG.genes.creativity.max - CONFIG.genes.creativity.min),
   };
 }
 
@@ -307,7 +404,7 @@ function createInitialAgents(grid: Cell[][], count: number = INITIAL_AGENTS): Ag
       sex: Math.random() < 0.5 ? "M" : "F",
       ageTicks: 0,
       genes: createRandomGenes(),
-      memory: { qTable: {} },
+      memory: createInitialMemory(),
       lastRule: "none"
     });
   }
@@ -396,6 +493,22 @@ function mutateGenes(parent: Genes): Genes {
     1.0
   );
 
+  const intelligence = mutateValue(
+    parent.intelligence,
+    mutationRate,
+    CONFIG.genes.mutation.intelligenceMagnitude,
+    0.0,
+    1.0
+  );
+
+  const creativity = mutateValue(
+    parent.creativity,
+    mutationRate,
+    CONFIG.genes.mutation.creativityMagnitude,
+    0.0,
+    1.0
+  );
+
   return {
     foodPreference,
     exploration,
@@ -404,6 +517,8 @@ function mutateGenes(parent: Genes): Genes {
     traitId,
     riskTolerance,
     socialDrive,
+    intelligence,
+    creativity,
   };
 }
 
@@ -428,10 +543,154 @@ function combineGenes(parent1: Genes, parent2: Genes): Genes {
     traitId: combinedTraitId,
     riskTolerance: (parent1.riskTolerance + parent2.riskTolerance) / 2,
     socialDrive: (parent1.socialDrive + parent2.socialDrive) / 2,
+    intelligence: (parent1.intelligence + parent2.intelligence) / 2,
+    creativity: (parent1.creativity + parent2.creativity) / 2,
   };
   
   // Apply mutation to the combined genes
   return mutateGenes(combinedGenes);
+}
+
+/**
+ * INVENTION SYSTEM
+ * Agents can discover tools and techniques based on intelligence + creativity + experience
+ */
+
+// Check if agent discovers something new this tick
+function tryDiscovery(agent: Agent, cell: Cell): { discovery: string | null; knowledge: Knowledge } {
+  const { intelligence, creativity } = agent.genes;
+  const knowledge = { ...agent.memory.knowledge };
+  
+  // Base discovery chance modified by intelligence and creativity
+  const discoveryChance = CONFIG.invention.discoveryChance * (1 + intelligence + creativity);
+  
+  if (Math.random() > discoveryChance) {
+    return { discovery: null, knowledge };
+  }
+  
+  // What can they discover? Depends on current knowledge and available resources
+  const discoveries: { name: string; field: keyof Knowledge; requires: () => boolean; boost: number }[] = [
+    { 
+      name: "basic toolmaking", 
+      field: "toolmaking", 
+      requires: () => (cell.hasSticks === true || cell.hasStones === true) && knowledge.toolmaking < 0.3,
+      boost: 0.15 + creativity * 0.1
+    },
+    { 
+      name: "advanced toolmaking", 
+      field: "toolmaking", 
+      requires: () => knowledge.toolmaking >= 0.3 && knowledge.toolmaking < 0.7,
+      boost: 0.1 + intelligence * 0.1
+    },
+    { 
+      name: "fire starting", 
+      field: "firemaking", 
+      requires: () => cell.hasSticks === true && knowledge.toolmaking >= 0.2 && knowledge.firemaking < 0.5,
+      boost: 0.2 + creativity * 0.15
+    },
+    { 
+      name: "food preservation", 
+      field: "foodStorage", 
+      requires: () => knowledge.toolmaking >= 0.3 && knowledge.foodStorage < 0.5,
+      boost: 0.15 + intelligence * 0.1
+    },
+    { 
+      name: "shelter construction", 
+      field: "shelterBuilding", 
+      requires: () => knowledge.toolmaking >= 0.4 && knowledge.shelterBuilding < 0.6,
+      boost: 0.15 + creativity * 0.1
+    },
+    { 
+      name: "hunting techniques", 
+      field: "hunting", 
+      requires: () => knowledge.toolmaking >= 0.2 && knowledge.hunting < 0.6,
+      boost: 0.1 + intelligence * 0.1
+    },
+  ];
+  
+  // Filter to valid discoveries and pick one randomly
+  const valid = discoveries.filter(d => d.requires());
+  if (valid.length === 0) {
+    return { discovery: null, knowledge };
+  }
+  
+  const chosen = valid[Math.floor(Math.random() * valid.length)];
+  knowledge[chosen.field] = Math.min(1.0, knowledge[chosen.field] + chosen.boost);
+  
+  return { discovery: chosen.name, knowledge };
+}
+
+// Craft a tool if agent has knowledge and resources
+function tryCraftTool(agent: Agent, cell: Cell): Tool | null {
+  const knowledge = agent.memory.knowledge;
+  
+  // Already has a tool? Can't carry another
+  if (agent.tool && agent.tool.type !== "none") {
+    return null;
+  }
+  
+  // Need resources and knowledge
+  if (!cell.hasSticks && !cell.hasStones) {
+    return null;
+  }
+  
+  // What can they craft?
+  if (cell.hasStones && knowledge.toolmaking >= 0.3 && Math.random() < knowledge.toolmaking) {
+    return { type: "stone_tool", durability: CONFIG.invention.toolDurability };
+  }
+  
+  if (cell.hasSticks && knowledge.toolmaking >= 0.5 && knowledge.hunting >= 0.3 && Math.random() < knowledge.toolmaking) {
+    return { type: "spear", durability: CONFIG.invention.toolDurability };
+  }
+  
+  if (cell.hasSticks && knowledge.foodStorage >= 0.4 && Math.random() < knowledge.foodStorage) {
+    return { type: "basket", durability: CONFIG.invention.toolDurability };
+  }
+  
+  if (cell.hasSticks && knowledge.toolmaking >= 0.1) {
+    return { type: "stick", durability: CONFIG.invention.toolDurability };
+  }
+  
+  return null;
+}
+
+// Apply tool benefits during the simulation step
+function applyToolBenefits(agent: Agent, cell: Cell, ateFood: boolean): { energyBonus: number; toolUsed: boolean } {
+  if (!agent.tool || agent.tool.type === "none") {
+    return { energyBonus: 0, toolUsed: false };
+  }
+  
+  let bonus = 0;
+  let used = false;
+  
+  switch (agent.tool.type) {
+    case "spear":
+      // Spear gives hunting bonus (chance for extra food)
+      if (Math.random() < agent.memory.knowledge.hunting * 0.3) {
+        bonus += 3; // Caught extra food through hunting
+        used = true;
+      }
+      break;
+    case "stone_tool":
+      // Stone tool makes food processing more efficient
+      if (ateFood) {
+        bonus += 2;
+        used = true;
+      }
+      break;
+    case "basket":
+      // Basket allows storing food (handled separately)
+      break;
+    case "stick":
+      // Basic stick helps with foraging
+      if (ateFood) {
+        bonus += 1;
+        used = true;
+      }
+      break;
+  }
+  
+  return { energyBonus: bonus, toolUsed: used };
 }
 
 /**
@@ -704,10 +963,98 @@ function stepWorld(
         richBonus = CONFIG.terrain.richFoodBonus;
         newEnergy += richBonus;
       }
+    }    let reward = -0.5; // small negative for existing (encourages action)
+    if (ateFood) reward += CONFIG.simulation.foodEnergyBonus + richBonus; // eating is good
+
+    // === INVENTION SYSTEM INTEGRATION ===
+    
+    // Fire provides warmth (energy savings) if agent is on a cell with fire
+    if (cell.fire && cell.fire.ticksRemaining > 0) {
+      newEnergy += CONFIG.invention.fireWarmth;
+      cell.fire.ticksRemaining--;
+      if (cell.fire.ticksRemaining <= 0) {
+        cell.fire = undefined;
+        logs.push(`🔥 Fire at (${finalX},${finalY}) burned out`);
+      }
+    }
+    
+    // Shelter provides hazard protection
+    if (cell.shelter && cell.terrain === "hazard") {
+      // Refund some of the hazard damage
+      newEnergy += CONFIG.terrain.hazardDamage * CONFIG.invention.shelterProtection;
+    }
+    
+    // Try to discover new knowledge
+    const discoveryResult = tryDiscovery(agent, cell);
+    let agentKnowledge = discoveryResult.knowledge;
+    if (discoveryResult.discovery) {
+      logs.push(`💡 Agent ${agent.id} discovered: ${discoveryResult.discovery}!`);
+      reward += CONFIG.invention.inventionReward;
+    }
+    
+    // Try to craft a tool if on a resource cell
+    let agentTool = agent.tool;
+    if (cell.hasSticks || cell.hasStones) {
+      const craftedTool = tryCraftTool({ ...agent, memory: { ...agent.memory, knowledge: agentKnowledge } }, cell);
+      if (craftedTool) {
+        agentTool = craftedTool;
+        logs.push(`🔧 Agent ${agent.id} crafted: ${craftedTool.type}!`);
+        reward += CONFIG.invention.inventionReward * 0.5;
+        // Consume the resource
+        if (craftedTool.type === "stone_tool" && cell.hasStones) {
+          cell.hasStones = false;
+        } else if (cell.hasSticks) {
+          cell.hasSticks = false;
+        }
+      }
+    }
+    
+    // Try to start a fire if agent has firemaking knowledge and sticks
+    if (cell.hasSticks && !cell.fire && agentKnowledge.firemaking >= 0.3 && Math.random() < agentKnowledge.firemaking * 0.2) {
+      cell.fire = { ticksRemaining: CONFIG.invention.fireDuration };
+      cell.hasSticks = false;
+      logs.push(`🔥 Agent ${agent.id} started a fire at (${finalX},${finalY})!`);
+      reward += CONFIG.invention.inventionReward * 0.3;
+    }
+    
+    // Try to build shelter if agent has knowledge and resources
+    if (!cell.shelter && cell.hasSticks && cell.hasStones && agentKnowledge.shelterBuilding >= 0.4 && Math.random() < agentKnowledge.shelterBuilding * 0.15) {
+      cell.shelter = { builderId: agent.id, durability: 100 };
+      cell.hasSticks = false;
+      cell.hasStones = false;
+      logs.push(`🏠 Agent ${agent.id} built a shelter at (${finalX},${finalY})!`);
+      reward += CONFIG.invention.inventionReward;
+    }
+    
+    // Apply tool benefits
+    const toolBenefits = applyToolBenefits({ ...agent, tool: agentTool }, cell, ateFood);
+    newEnergy += toolBenefits.energyBonus;
+    
+    // Degrade tool if used
+    if (toolBenefits.toolUsed && agentTool && agentTool.type !== "none") {
+      agentTool = { ...agentTool, durability: agentTool.durability - 5 };
+      if (agentTool.durability <= 0) {
+        logs.push(`🔨 Agent ${agent.id}'s ${agentTool.type} broke!`);
+        agentTool = undefined;
+      }
+    }
+    
+    // Basket allows storing food for later
+    let agentStoredFood = agent.storedFood ?? 0;
+    if (agentTool?.type === "basket" && ateFood && agentStoredFood < CONFIG.invention.basketCapacity) {
+      // Store some of the food energy instead of consuming it all now
+      const storeAmount = Math.min(2, CONFIG.invention.basketCapacity - agentStoredFood);
+      agentStoredFood += storeAmount;
+    }
+    
+    // Use stored food if hungry
+    if (agentStoredFood > 0 && newEnergy < CONFIG.energy.hungryCutoffRatio) {
+      newEnergy += 3; // eat from storage
+      agentStoredFood--;
+      logs.push(`🧺 Agent ${agent.id} ate from stored food`);
     }
 
-    let reward = -1;
-    if (ateFood) reward += CONFIG.simulation.foodEnergyBonus + richBonus;
+    // === END INVENTION SYSTEM ===
 
     // Increment age
     const newAgeTicks = (agent.ageTicks ?? 0) + 1;
@@ -716,9 +1063,7 @@ function stepWorld(
     // Decrement reproduction cooldown
     const newCooldown = agent.reproductionCooldown 
       ? Math.max(0, agent.reproductionCooldown - 1) 
-      : 0;
-
-    let parentAgent: Agent = {
+      : 0;    let parentAgent: Agent = {
       ...agent,
       x: finalX,
       y: finalY,
@@ -728,6 +1073,9 @@ function stepWorld(
       lastDirection: decision.dir,
       reproductionCooldown: newCooldown,
       pregnantWith: agent.pregnantWith, // carry forward pregnancy state
+      tool: agentTool,
+      storedFood: agentStoredFood,
+      memory: { ...agent.memory, knowledge: agentKnowledge },
     };
 
     // PROCESS PREGNANCY - Check if gestation complete
@@ -757,19 +1105,29 @@ function stepWorld(
         if (birthSpots.length > 0) {
           const spot = birthSpots[randomInt(birthSpots.length)];
           
-          // Child gets portion of mother's current energy
-          const childEnergy = Math.floor(parentAgent.energy * 0.4);
+          // Child gets portion of mother's current energy (reduced cost to encourage reproduction)
+          const childEnergy = Math.floor(parentAgent.energy * CONFIG.reproduction.energyCostRatio);
           parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
 
           const child: Agent = {
             id: nextId++,
             x: spot.x,
             y: spot.y,
-            energy: childEnergy,
+            energy: Math.max(childEnergy, 8), // minimum starting energy for babies
             sex: Math.random() < 0.5 ? "M" : "F",
             ageTicks: 0,
             genes: currentPregnancy.childGenes,
-            memory: { qTable: { ...parentAgent.memory.qTable } }, // inherit genetic memory
+            // Inherit genetic memory: Q-table and partial knowledge from parent
+            memory: { 
+              qTable: { ...parentAgent.memory.qTable },
+              knowledge: {
+                toolmaking: parentAgent.memory.knowledge.toolmaking * CONFIG.invention.knowledgeTransferRate,
+                firemaking: parentAgent.memory.knowledge.firemaking * CONFIG.invention.knowledgeTransferRate,
+                foodStorage: parentAgent.memory.knowledge.foodStorage * CONFIG.invention.knowledgeTransferRate,
+                shelterBuilding: parentAgent.memory.knowledge.shelterBuilding * CONFIG.invention.knowledgeTransferRate,
+                hunting: parentAgent.memory.knowledge.hunting * CONFIG.invention.knowledgeTransferRate,
+              },
+            },
             lastRule: 'Born',
             reproductionCooldown: 0,
           };
@@ -783,7 +1141,8 @@ function stepWorld(
           );
 
           gaveBirth = true;
-          reward += CONFIG.simulation.reproductionReward;
+          // BIG reward for giving birth - this is the ultimate goal: genetic preservation!
+          reward += CONFIG.simulation.reproductionReward + CONFIG.simulation.birthReward;
         } else {
           // No space - pregnancy continues (difficult birth)
           parentAgent = {
@@ -893,8 +1252,8 @@ function stepWorld(
           // Combine genes from both parents for the future child
           const childGenes = combineGenes(female.genes, male.genes);
           
-          // Both parents pay initial energy cost for mating
-          const matingEnergyCost = 2;
+          // Both parents pay initial energy cost for mating (low cost to encourage mating)
+          const matingEnergyCost = CONFIG.reproduction.matingEnergyCost;
           parentAgent = { ...parentAgent, energy: parentAgent.energy - matingEnergyCost };
           
           // Update mate's energy
@@ -954,7 +1313,7 @@ function stepWorld(
           }
 
           reproduced = true;
-          reward += 1; // Small reward for successful mating
+          reward += CONFIG.simulation.matingReward; // Good reward for successful mating - passing genes is the goal!
         }
       }
     }
@@ -965,6 +1324,7 @@ function stepWorld(
     const deathReason = isTooOld ? "old age" : "low energy";
 
     // Apply death penalty BEFORE Q-update so the agent learns from death
+    // But keep it small - death is natural, the goal is reproduction not immortality
     if (isDeadAfterStep) {
       reward -= CONFIG.simulation.deathPenalty;
     }
@@ -985,7 +1345,7 @@ function stepWorld(
       updatedQ
     );
 
-    parentAgent = { ...parentAgent, memory: { qTable: newQTable } };
+    parentAgent = { ...parentAgent, memory: { qTable: newQTable, knowledge: parentAgent.memory.knowledge } };
 
     if (!isDeadAfterStep) {
       updatedAgents.push(parentAgent);
@@ -1021,15 +1381,18 @@ function stepWorld(
       logs.push(`Food recycled: removed ${recycleResult.removedCount} excess food cells`);
     }
   }
-
   /**
    * CRITICAL BUG FIX #1: Food spawning bug
    * Previously, placeRandomFood returned a new grid but the result was discarded.
    * Now we properly use the returned grid to ensure food actually appears.
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
-    const gridWithFood = placeRandomFood(finalGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs };
+    finalGrid = placeRandomFood(finalGrid, CONFIG.simulation.foodSpawnCount);
+  }
+
+  // Spawn resources (sticks and stones) periodically
+  if (Math.random() < 0.3) { // 30% chance each tick to spawn some resources
+    finalGrid = spawnResources(finalGrid);
   }
 
   return { agents: updatedAgents, grid: finalGrid, log: logs };
@@ -1228,8 +1591,7 @@ const AgentAvatar: React.FC<{
           strokeWidth="0.3"
         />
       )}
-      
-      {/* Young indicator (baby icon) */}
+        {/* Young indicator (baby icon) */}
       {ageYears < CONFIG.time.minReproAgeYears && (
         <text x="2" y="8" fontSize="6" fill="#fff">👶</text>
       )}
@@ -1237,6 +1599,22 @@ const AgentAvatar: React.FC<{
       {/* Elder indicator */}
       {ageYears > CONFIG.time.maxReproAgeYears && (
         <text x="2" y="8" fontSize="5" fill="#fff">👴</text>
+      )}
+      
+      {/* Tool indicator */}
+      {agent.tool && agent.tool.type !== "none" && (
+        <text x="17" y="20" fontSize="5" fill="#fff">
+          {agent.tool.type === "spear" ? "🗡️" : 
+           agent.tool.type === "stone_tool" ? "🪨" : 
+           agent.tool.type === "basket" ? "🧺" : 
+           agent.tool.type === "stick" ? "🪵" : 
+           agent.tool.type === "fire" ? "🔥" : ""}
+        </text>
+      )}
+      
+      {/* Stored food indicator */}
+      {agent.storedFood && agent.storedFood > 0 && (
+        <text x="1" y="20" fontSize="5" fill="#fff">🍎{agent.storedFood}</text>
       )}
     </svg>
   );
@@ -1342,14 +1720,15 @@ function downloadWorld(state: WorldState) {
 
 /**
  * REFACTOR: Shared initialization function
- * Creates a fresh world state with terrain, food and agents to avoid duplication
+ * Creates a fresh world state with terrain, food, resources, and agents to avoid duplication
  */
 function initializeWorld(): { grid: Cell[][]; agents: Agent[] } {
   const empty = createEmptyGrid();
   const withTerrain = addRandomTerrain(empty);
   const withFood = placeRandomFood(withTerrain, INITIAL_FOOD);
-  const agents = createInitialAgents(withFood);
-  return { grid: withFood, agents };
+  const withResources = spawnResources(withFood); // Add initial resources
+  const agents = createInitialAgents(withResources);
+  return { grid: withResources, agents };
 }
 
 const App: React.FC = () => {
@@ -1463,10 +1842,11 @@ const App: React.FC = () => {
     const empty = createEmptyGrid();
     const withTerrain = addRandomTerrain(empty);
     const withFood = placeRandomFood(withTerrain, settings.initialFood);
-    const newAgents = createInitialAgents(withFood, settings.initialAgents);
-    setGrid(withFood);
+    const withResources = spawnResources(withFood); // Add initial resources
+    const newAgents = createInitialAgents(withResources, settings.initialAgents);
+    setGrid(withResources);
     setAgents(newAgents);
-    setLog([`New world created with ${settings.initialAgents} agents and ${settings.initialFood} food`]);
+    setLog([`New world created with ${settings.initialAgents} agents, ${settings.initialFood} food, and resources`]);
     setSelectedAgentId(null);
     setTick(0);
     setHistory([]);
@@ -1507,7 +1887,7 @@ const App: React.FC = () => {
           sex: "M",
           ageTicks: 0,
           genes: createRandomGenes(),
-          memory: { qTable: {} },
+          memory: createInitialMemory(),
           lastRule: "Spawned by God's Finger",
         };
 
@@ -1519,7 +1899,7 @@ const App: React.FC = () => {
           sex: "F",
           ageTicks: 0,
           genes: createRandomGenes(),
-          memory: { qTable: {} },
+          memory: createInitialMemory(),
           lastRule: "Spawned by God's Finger",
         };
 
@@ -1555,7 +1935,7 @@ const App: React.FC = () => {
           sex: targetSex,
           ageTicks: 0,
           genes: createRandomGenes(),
-          memory: { qTable: {} },
+          memory: createInitialMemory(),
           lastRule: "Spawned by God's Finger",
         };
 
@@ -1651,8 +2031,8 @@ const App: React.FC = () => {
     return {
       avgEnergy: totalEnergy / agents.length,
       avgMutationRate: totalMutationRate / agents.length,
-      avgReproThreshold: totalReproThreshold / agents.length,
       uniqueTraits,
+      avgReproThreshold: totalReproThreshold / agents.length,
       pregnantCount,
       maleCount,
       femaleCount,
@@ -1900,10 +2280,50 @@ const App: React.FC = () => {
                       ? `Terrain: ${cell.terrain}`
                       : ""
                   }
-                >
-                  {/* Terrain indicator (background) */}
+                >                  {/* Terrain indicator (background) */}
                   {!agent && !cell.food && terrainIcon && (
                     <span style={{ fontSize: 12, opacity: 0.5 }}>{terrainIcon}</span>
+                  )}
+                  
+                  {/* Resource indicators (sticks/stones) */}
+                  {!agent && !cell.food && (cell.hasSticks || cell.hasStones) && (
+                    <div style={{ 
+                      position: "absolute", 
+                      bottom: 1, 
+                      left: 1, 
+                      fontSize: 8,
+                      display: "flex",
+                      gap: 1
+                    }}>
+                      {cell.hasSticks && <span title="Sticks">🪵</span>}
+                      {cell.hasStones && <span title="Stones">🪨</span>}
+                    </div>
+                  )}
+                  
+                  {/* Fire indicator */}
+                  {cell.fire && cell.fire.ticksRemaining > 0 && (
+                    <div style={{ 
+                      position: "absolute", 
+                      top: 1, 
+                      right: 1, 
+                      fontSize: 10,
+                      animation: "pulse 0.5s infinite"
+                    }} title={`Fire (${cell.fire.ticksRemaining} ticks)`}>
+                      🔥
+                    </div>
+                  )}
+                  
+                  {/* Shelter indicator */}
+                  {cell.shelter && (
+                    <div style={{ 
+                      position: "absolute", 
+                      top: 1, 
+                      left: 1, 
+                      fontSize: 10,
+                      opacity: 0.8
+                    }} title={`Shelter (${cell.shelter.durability}% durability)`}>
+                      🏠
+                    </div>
                   )}
                   
                   {/* Food icon */}
@@ -2266,8 +2686,7 @@ const App: React.FC = () => {
               <p>
                 <strong>Last Rule:</strong>{" "}
                 {selectedAgent.lastRule}
-              </p>
-              <p>
+              </p>              <p>
                 <strong>Genes:</strong>
                 <br />
                 foodPref={selectedAgent.genes.foodPreference.toFixed(2)},{" "}
@@ -2275,11 +2694,46 @@ const App: React.FC = () => {
                 reproThresh={selectedAgent.genes.reproductionThreshold.toFixed(1)},{" "}
                 mutationRate={selectedAgent.genes.mutationRate.toFixed(2)}
                 <br />
+                <strong>Intelligence:</strong> {selectedAgent.genes.intelligence.toFixed(2)},{" "}
+                <strong>Creativity:</strong> {selectedAgent.genes.creativity.toFixed(2)}
+                <br />
                 <strong>Personality:</strong> riskTolerance={selectedAgent.genes.riskTolerance.toFixed(2)},{" "}
                 socialDrive={selectedAgent.genes.socialDrive.toFixed(2)}
                 <br />
                 traitId={selectedAgent.genes.traitId}
               </p>
+              {/* Tool and Inventory */}
+              {(selectedAgent.tool || selectedAgent.storedFood) && (
+                <p style={{ background: "rgba(100,200,255,0.1)", padding: "4px 8px", borderRadius: 4 }}>
+                  <strong>🎒 Inventory:</strong>
+                  {selectedAgent.tool && selectedAgent.tool.type !== "none" && (
+                    <>
+                      <br />
+                      Tool: {selectedAgent.tool.type} ({selectedAgent.tool.durability}% durability)
+                    </>
+                  )}
+                  {selectedAgent.storedFood && selectedAgent.storedFood > 0 && (
+                    <>
+                      <br />
+                      Stored Food: {selectedAgent.storedFood}/{CONFIG.invention.basketCapacity}
+                    </>
+                  )}
+                </p>
+              )}
+              {/* Knowledge */}
+              {selectedAgent.memory.knowledge && (
+                <p style={{ background: "rgba(255,200,100,0.1)", padding: "4px 8px", borderRadius: 4, fontSize: "0.85em" }}>
+                  <strong>📚 Knowledge:</strong>
+                  <br />
+                  🔧 Toolmaking: {(selectedAgent.memory.knowledge.toolmaking * 100).toFixed(0)}%
+                  {" | "}🔥 Fire: {(selectedAgent.memory.knowledge.firemaking * 100).toFixed(0)}%
+                  <br />
+                  🏠 Shelter: {(selectedAgent.memory.knowledge.shelterBuilding * 100).toFixed(0)}%
+                  {" | "}🍖 Food Storage: {(selectedAgent.memory.knowledge.foodStorage * 100).toFixed(0)}%
+                  <br />
+                  🏹 Hunting: {(selectedAgent.memory.knowledge.hunting * 100).toFixed(0)}%
+                </p>
+              )}
             </>) : (
             <p>Click an agent in the grid to inspect its genetic memory.</p>
           )}
@@ -2292,8 +2746,7 @@ const App: React.FC = () => {
             borderRadius: "10px",
             border: "1px solid #2a3a5a"
           }}
-        >
-          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>🧬 How It Works</h3>
+        >          <h3 style={{ margin: "0 0 10px 0", fontSize: 15 }}>🧬 How It Works</h3>
           <ul style={{ fontSize: "0.8em", margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
             <li>
               <strong>Survival:</strong> Hungry agents seek food. Hazard terrain drains energy.
@@ -2312,6 +2765,12 @@ const App: React.FC = () => {
             </li>
             <li>
               <strong>Aging:</strong> Fertility peaks at ~28y, death at {CONFIG.time.maxAgeYears}y.
+            </li>
+            <li>
+              <strong>Inventions:</strong> Agents discover tools, fire, and shelter based on intelligence.
+            </li>
+            <li>
+              <strong>Knowledge:</strong> Skills pass to children at {(CONFIG.invention.knowledgeTransferRate * 100)}% rate.
             </li>
           </ul>
         </div>{/* Charts */}
