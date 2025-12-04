@@ -20,6 +20,7 @@ interface Agent {
   x: number;
   y: number;
   energy: number; // "energia"
+  sex: "M" | "F";
   genes: Genes;
   memory: Memory;
   lastRule?: string;
@@ -28,6 +29,7 @@ interface Agent {
 interface Cell {
   food: boolean;
   agentId?: number;
+  terrain: "plain" | "water" | "rich";
 }
 
 interface HistoryPoint {
@@ -41,6 +43,15 @@ interface WorldState {
   agents: Agent[];
   tick: number;
   history: HistoryPoint[];
+}
+
+interface SimulationSettings {
+  initialAgents: number;
+  initialFood: number;
+  foodSpawnChance: number;
+  foodSpawnCount: number;
+  foodRecycleEnabled: boolean;
+  maxFoodPerAgent: number; // max food cells allowed per living agent
 }
 
 /**
@@ -129,12 +140,31 @@ function applyDirection(
 
 function createEmptyGrid(): Cell[][] {
   return Array.from({ length: GRID_HEIGHT }, () =>
-    Array.from({ length: GRID_WIDTH }, () => ({ food: false } as Cell))
+    Array.from({ length: GRID_WIDTH }, () => ({ food: false, terrain: "plain" as const }))
   );
 }
 
 function randomInt(max: number) {
   return Math.floor(Math.random() * max);
+}
+
+/**
+ * Add random terrain to the grid
+ * ~5% water cells, ~10% rich cells
+ */
+function addRandomTerrain(grid: Cell[][]): Cell[][] {
+  const copy = grid.map(row => row.map(cell => ({ ...cell })));
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      const roll = Math.random();
+      if (roll < 0.05) {
+        copy[y][x].terrain = "water";
+      } else if (roll < 0.15) {
+        copy[y][x].terrain = "rich";
+      }
+    }
+  }
+  return copy;
 }
 
 function placeRandomFood(grid: Cell[][], count: number): Cell[][] {
@@ -145,12 +175,64 @@ function placeRandomFood(grid: Cell[][], count: number): Cell[][] {
     safety++;
     const y = randomInt(GRID_HEIGHT);
     const x = randomInt(GRID_WIDTH);
-    if (!copy[y][x].food && copy[y][x].agentId === undefined) {
+    // Don't place food on water or occupied cells
+    if (!copy[y][x].food && copy[y][x].agentId === undefined && copy[y][x].terrain !== "water") {
       copy[y][x].food = true;
       placed++;
     }
   }
   return copy;
+}
+
+/**
+ * Food recycling: remove excess food when there are too few agents
+ * This prevents the board from getting overcrowded with food when agents die off
+ * @param grid - Current grid state
+ * @param agentCount - Number of living agents
+ * @param maxFoodPerAgent - Maximum food cells allowed per agent
+ * @returns Object with updated grid and number of food cells removed
+ */
+function recycleFoodIfNeeded(
+  grid: Cell[][],
+  agentCount: number,
+  maxFoodPerAgent: number
+): { grid: Cell[][]; removedCount: number } {
+  // Count current food
+  let foodCount = 0;
+  const foodPositions: { x: number; y: number }[] = [];
+  
+  for (let y = 0; y < GRID_HEIGHT; y++) {
+    for (let x = 0; x < GRID_WIDTH; x++) {
+      if (grid[y][x].food) {
+        foodCount++;
+        foodPositions.push({ x, y });
+      }
+    }
+  }
+  
+  // Calculate max allowed food (minimum of 5 to keep some food even with 0-1 agents)
+  const maxAllowedFood = Math.max(5, agentCount * maxFoodPerAgent);
+  
+  // If under limit, no recycling needed
+  if (foodCount <= maxAllowedFood) {
+    return { grid, removedCount: 0 };
+  }
+  
+  // Need to remove excess food
+  const toRemove = foodCount - maxAllowedFood;
+  const copy = grid.map(row => row.map(cell => ({ ...cell })));
+  
+  // Shuffle food positions and remove from random locations
+  const shuffled = foodPositions.sort(() => Math.random() - 0.5);
+  let removed = 0;
+  
+  for (const pos of shuffled) {
+    if (removed >= toRemove) break;
+    copy[pos.y][pos.x].food = false;
+    removed++;
+  }
+  
+  return { grid: copy, removedCount: removed };
 }
 
 function randomTraitId(): number {
@@ -168,22 +250,24 @@ function createRandomGenes(): Genes {
   };
 }
 
-function createInitialAgents(grid: Cell[][]): Agent[] {
+function createInitialAgents(grid: Cell[][], count: number = INITIAL_AGENTS): Agent[] {
   const agents: Agent[] = [];
   let idCounter = 1;
   const taken: Set<string> = new Set();
 
-  while (agents.length < INITIAL_AGENTS) {
+  while (agents.length < count) {
     const y = randomInt(GRID_HEIGHT);
     const x = randomInt(GRID_WIDTH);
     const key = `${x},${y}`;
-    if (taken.has(key) || grid[y][x].food) continue;
+    // Don't spawn on water, food, or occupied cells
+    if (taken.has(key) || grid[y][x].food || grid[y][x].terrain === "water") continue;
     taken.add(key);
     agents.push({
       id: idCounter++,
       x,
       y,
       energy: CONFIG.energy.initialMin + randomInt(CONFIG.energy.initialMax - CONFIG.energy.initialMin),
+      sex: Math.random() < 0.5 ? "M" : "F",
       genes: createRandomGenes(),
       memory: { qTable: {} },
       lastRule: "none"
@@ -264,6 +348,27 @@ function mutateGenes(parent: Genes): Genes {
     mutationRate: newMutationRate,
     traitId
   };
+}
+
+/**
+ * Combine genes from two parents for sexual reproduction.
+ * Averages numeric gene fields, randomly picks traitId from one parent,
+ * then applies mutation.
+ */
+function combineGenes(parent1: Genes, parent2: Genes): Genes {
+  const avgMutationRate = (parent1.mutationRate + parent2.mutationRate) / 2;
+  
+  const combinedGenes: Genes = {
+    foodPreference: (parent1.foodPreference + parent2.foodPreference) / 2,
+    exploration: (parent1.exploration + parent2.exploration) / 2,
+    reproductionThreshold: (parent1.reproductionThreshold + parent2.reproductionThreshold) / 2,
+    mutationRate: avgMutationRate,
+    // Randomly inherit traitId from one parent
+    traitId: Math.random() < 0.5 ? parent1.traitId : parent2.traitId
+  };
+  
+  // Apply mutation to the combined genes
+  return mutateGenes(combinedGenes);
 }
 
 /**
@@ -385,7 +490,8 @@ function decideMove(
  */
 function stepWorld(
   agents: Agent[],
-  grid: Cell[][]
+  grid: Cell[][],
+  foodRecycleSettings?: { enabled: boolean; maxFoodPerAgent: number }
 ): { agents: Agent[]; grid: Cell[][]; log: string[] } {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
@@ -424,16 +530,24 @@ function stepWorld(
     agentMoves.push({ agent, newPos, decision, stateKey });
   }
 
-  // Phase 2: Process moves with collision detection
+  // Phase 2: Process moves with collision detection and terrain checks
   for (const { agent, newPos, decision, stateKey } of agentMoves) {
     const destKey = `${newPos.x},${newPos.y}`;
     
-    // Track the final position (may change due to collision)
+    // Track the final position (may change due to collision or terrain)
     let finalX = newPos.x;
     let finalY = newPos.y;
     
+    // Check if target cell is water - prevent movement
+    if (grid[newPos.y][newPos.x].terrain === "water") {
+      logs.push(
+        `Agent ${agent.id} blocked by water at (${newPos.x},${newPos.y}), stayed at (${agent.x},${agent.y})`
+      );
+      finalX = agent.x;
+      finalY = agent.y;
+    }
     // Check if another agent already claimed this destination
-    if (destinationMap.has(destKey)) {
+    else if (destinationMap.has(destKey)) {
       // Collision detected - agent stays in place
       logs.push(
         `Agent ${agent.id} collision at (${newPos.x},${newPos.y}), stayed at (${agent.x},${agent.y})`
@@ -448,15 +562,21 @@ function stepWorld(
     let newEnergy = agent.energy - CONFIG.simulation.baseEnergyCost;
     const cell = newGrid[finalY][finalX];
     let ateFood = false;
+    let richBonus = 0;
 
     if (cell.food) {
       ateFood = true;
       cell.food = false;
       newEnergy += CONFIG.simulation.foodEnergyBonus;
+      // Rich terrain gives extra energy when eating food
+      if (cell.terrain === "rich") {
+        richBonus = 2;
+        newEnergy += richBonus;
+      }
     }
 
     let reward = -1;
-    if (ateFood) reward += CONFIG.simulation.foodEnergyBonus;
+    if (ateFood) reward += CONFIG.simulation.foodEnergyBonus + richBonus;
 
     let parentAgent: Agent = {
       ...agent,
@@ -464,54 +584,96 @@ function stepWorld(
       y: finalY,
       energy: newEnergy,
       lastRule: decision.rule
-    };
-
-    // REPRODUCTION
+    };    // REPRODUCTION (Sexual - requires opposite-sex mate)
     const reproThreshold = parentAgent.genes.reproductionThreshold;
     let reproduced = false;
 
     if (parentAgent.energy > reproThreshold) {
-      const neighborSpots = [
+      // Find adjacent agents of opposite sex with sufficient energy
+      const adjacentPositions = [
         { x: finalX, y: finalY - 1 },
         { x: finalX, y: finalY + 1 },
         { x: finalX - 1, y: finalY },
         { x: finalX + 1, y: finalY }
       ].filter(
-        p =>
-          p.x >= 0 &&
-          p.x < GRID_WIDTH &&
-          p.y >= 0 &&
-          p.y < GRID_HEIGHT &&
-          newGrid[p.y][p.x].agentId === undefined &&
-          !destinationMap.has(`${p.x},${p.y}`) // Also check collision map
+        p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
       );
 
-      if (neighborSpots.length > 0) {
-        const spot = neighborSpots[randomInt(neighborSpots.length)];
+      // Look for a mate - opposite sex agent with enough energy
+      let mate: Agent | undefined;
+      for (const pos of adjacentPositions) {
+        const mateId = newGrid[pos.y][pos.x].agentId;
+        if (mateId !== undefined) {
+          // Check both updatedAgents (already processed) and original agents
+          const potentialMate = 
+            updatedAgents.find(a => a.id === mateId) || 
+            agents.find(a => a.id === mateId);
+          if (
+            potentialMate &&
+            potentialMate.sex !== parentAgent.sex &&
+            potentialMate.energy > potentialMate.genes.reproductionThreshold
+          ) {
+            mate = potentialMate;
+            break;
+          }
+        }
+      }
 
-        const childEnergy = Math.floor(parentAgent.energy / 2);
-        parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };        const childGenes = mutateGenes(parentAgent.genes);
-        // Child inherits a shallow copy of parent's qTable for genetic memory
-        const child: Agent = {
-          id: nextId++,
-          x: spot.x,
-          y: spot.y,
-          energy: childEnergy,
-          genes: childGenes,
-          memory: { qTable: { ...parentAgent.memory.qTable } },
-          lastRule: 'Born (memória genética + "Mutation")'
-        };
+      if (mate) {
+        // Find empty spots for child (not water, not occupied)
+        const neighborSpots = adjacentPositions.filter(
+          p =>
+            newGrid[p.y][p.x].agentId === undefined &&
+            newGrid[p.y][p.x].terrain !== "water" &&
+            !destinationMap.has(`${p.x},${p.y}`)
+        );
 
-        newGrid[spot.y][spot.x].agentId = child.id;
-        destinationMap.set(`${spot.x},${spot.y}`, child.id); // Register child position
-        updatedAgents.push(child);
+        if (neighborSpots.length > 0) {
+          const spot = neighborSpots[randomInt(neighborSpots.length)];
 
-        reward += CONFIG.simulation.reproductionReward;
-        reproduced = true;
+          // Both parents contribute energy
+          const parentContribution = Math.floor(parentAgent.energy / 4);
+          const mateContribution = Math.floor(mate.energy / 4);
+          const childEnergy = parentContribution + mateContribution;
 
-        logs.push(
-          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}`
-        );      }
+          parentAgent = { ...parentAgent, energy: parentAgent.energy - parentContribution };
+
+          // Update mate's energy in the arrays
+          const mateInUpdated = updatedAgents.findIndex(a => a.id === mate!.id);
+          if (mateInUpdated !== -1) {
+            updatedAgents[mateInUpdated] = { 
+              ...updatedAgents[mateInUpdated], 
+              energy: updatedAgents[mateInUpdated].energy - mateContribution 
+            };
+          }
+
+          // Combine genes from both parents
+          const childGenes = combineGenes(parentAgent.genes, mate.genes);
+
+          // Child inherits qTable from first parent for genetic memory
+          const child: Agent = {
+            id: nextId++,
+            x: spot.x,
+            y: spot.y,
+            energy: childEnergy,
+            sex: Math.random() < 0.5 ? "M" : "F",
+            genes: childGenes,
+            memory: { qTable: { ...parentAgent.memory.qTable } },
+            lastRule: 'Born (sexual reproduction)'
+          };
+
+          newGrid[spot.y][spot.x].agentId = child.id;
+          destinationMap.set(`${spot.x},${spot.y}`, child.id);
+          updatedAgents.push(child);
+
+          reward += CONFIG.simulation.reproductionReward;
+          reproduced = true;
+
+          logs.push(
+            `Agent ${parentAgent.id}(${parentAgent.sex}) + ${mate.id}(${mate.sex}) → child ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}, energia ${childEnergy}`
+          );
+        }
+      }
     }
 
     // Determine if agent will die after this step
@@ -546,7 +708,7 @@ function stepWorld(
 
       logs.push(
         `Agent ${parentAgent.id} used ${decision.rule}, moved to (${parentAgent.x},${parentAgent.y})` +
-          (ateFood ? " and ate food (+5 energia)" : "") +
+          (ateFood ? ` and ate food (+${CONFIG.simulation.foodEnergyBonus}${richBonus > 0 ? `+${richBonus} rich` : ""} energia)` : "") +
           (reproduced ? " and reproduced (+2 reward)" : "") +
           `, energia now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
       );
@@ -557,17 +719,35 @@ function stepWorld(
     }
   }
 
+  let finalGrid = newGrid;
+
+  /**
+   * Food recycling: remove excess food when there are too few agents
+   * This prevents the board from getting overcrowded with food
+   */
+  if (foodRecycleSettings?.enabled) {
+    const recycleResult = recycleFoodIfNeeded(
+      finalGrid, 
+      updatedAgents.length, 
+      foodRecycleSettings.maxFoodPerAgent
+    );
+    finalGrid = recycleResult.grid;
+    if (recycleResult.removedCount > 0) {
+      logs.push(`Food recycled: removed ${recycleResult.removedCount} excess food cells`);
+    }
+  }
+
   /**
    * CRITICAL BUG FIX #1: Food spawning bug
    * Previously, placeRandomFood returned a new grid but the result was discarded.
    * Now we properly use the returned grid to ensure food actually appears.
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
-    const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
+    const gridWithFood = placeRandomFood(finalGrid, CONFIG.simulation.foodSpawnCount);
     return { agents: updatedAgents, grid: gridWithFood, log: logs };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs };
+  return { agents: updatedAgents, grid: finalGrid, log: logs };
 }
 
 /**
@@ -688,11 +868,12 @@ function downloadWorld(state: WorldState) {
 
 /**
  * REFACTOR: Shared initialization function
- * Creates a fresh world state with food and agents to avoid duplication
+ * Creates a fresh world state with terrain, food and agents to avoid duplication
  */
 function initializeWorld(): { grid: Cell[][]; agents: Agent[] } {
   const empty = createEmptyGrid();
-  const withFood = placeRandomFood(empty, INITIAL_FOOD);
+  const withTerrain = addRandomTerrain(empty);
+  const withFood = placeRandomFood(withTerrain, INITIAL_FOOD);
   const agents = createInitialAgents(withFood);
   return { grid: withFood, agents };
 }
@@ -718,6 +899,15 @@ const App: React.FC = () => {
   const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
   const [showStartupModal, setShowStartupModal] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Simulation settings state (user-adjustable)
+  const [settings, setSettings] = useState<SimulationSettings>({
+    initialAgents: CONFIG.simulation.initialAgents,
+    initialFood: CONFIG.simulation.initialFood,
+    foodSpawnChance: CONFIG.simulation.foodSpawnChance,
+    foodSpawnCount: CONFIG.simulation.foodSpawnCount,
+    foodRecycleEnabled: true,
+    maxFoodPerAgent: 4, // allow up to 4 food cells per living agent
+  });
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tickRef = useRef(0);
@@ -771,7 +961,8 @@ const App: React.FC = () => {
   const handleStep = useCallback(() => {
     const { agents: newAgents, grid: newGrid, log: newLog } = stepWorld(
       agents,
-      renderedGrid
+      renderedGrid,
+      { enabled: settings.foodRecycleEnabled, maxFoodPerAgent: settings.maxFoodPerAgent }
     );
     const newTick = tickRef.current + 1;
     setTick(newTick);
@@ -779,7 +970,7 @@ const App: React.FC = () => {
     setGrid(newGrid);
     setLog(prev => [...newLog, ...prev].slice(0, 80));
     pushHistory(newAgents, newTick);
-  }, [agents, renderedGrid, pushHistory]);
+  }, [agents, renderedGrid, pushHistory, settings.foodRecycleEnabled, settings.maxFoodPerAgent]);
 
   const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
@@ -792,6 +983,22 @@ const App: React.FC = () => {
     setIsRunning(false);
     setWatchedTraitId(null);
   };
+
+  // Create a new world from current settings
+  const createWorldFromSettings = useCallback(() => {
+    const empty = createEmptyGrid();
+    const withTerrain = addRandomTerrain(empty);
+    const withFood = placeRandomFood(withTerrain, settings.initialFood);
+    const newAgents = createInitialAgents(withFood, settings.initialAgents);
+    setGrid(withFood);
+    setAgents(newAgents);
+    setLog([`New world created with ${settings.initialAgents} agents and ${settings.initialFood} food`]);
+    setSelectedAgentId(null);
+    setTick(0);
+    setHistory([]);
+    setIsRunning(false);
+    setWatchedTraitId(null);
+  }, [settings]);
 
   // Auto-run interval
   useEffect(() => {
@@ -1007,8 +1214,12 @@ const App: React.FC = () => {
               const isWatched =
                 agent && watchedTraitId !== null && agent.genes.traitId === watchedTraitId;
 
-              let bg = "#1f2640";
-              if (cell.food) bg = "#2c9c3f";
+              // Determine background color based on terrain, food, and agent
+              let bg = "#1f2640"; // plain terrain default
+              if (cell.terrain === "water") bg = "#1e3a5f"; // water - blue
+              else if (cell.terrain === "rich") bg = "#3d2e1f"; // rich - brownish
+              
+              if (cell.food) bg = cell.terrain === "rich" ? "#4caf50" : "#2c9c3f"; // brighter green on rich
               if (agent) bg = colorForTrait(agent.genes.traitId);
               if (cell.food && agent) bg = "#ffb300";
 
@@ -1114,6 +1325,93 @@ const App: React.FC = () => {
               <strong>Unique Traits:</strong> {stats.uniqueTraits}
             </p>
           </div>
+        </div>
+
+        {/* Simulation Settings */}
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px",
+            background: "#151a30",
+            borderRadius: "8px",
+            border: "1px solid #333"
+          }}
+        >
+          <h3>Simulation Settings</h3>
+          <div style={{ fontSize: "0.85em", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+            <label>
+              Initial Agents:
+              <input
+                type="number"
+                min={1}
+                max={50}
+                value={settings.initialAgents}
+                onChange={e => setSettings(s => ({ ...s, initialAgents: Number(e.target.value) }))}
+                style={{ width: "60px", marginLeft: 8 }}
+              />
+            </label>
+            <label>
+              Initial Food:
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={settings.initialFood}
+                onChange={e => setSettings(s => ({ ...s, initialFood: Number(e.target.value) }))}
+                style={{ width: "60px", marginLeft: 8 }}
+              />
+            </label>
+            <label>
+              Food Spawn %:
+              <input
+                type="number"
+                min={0}
+                max={100}
+                step={5}
+                value={Math.round(settings.foodSpawnChance * 100)}
+                onChange={e => setSettings(s => ({ ...s, foodSpawnChance: Number(e.target.value) / 100 }))}
+                style={{ width: "60px", marginLeft: 8 }}
+              />
+            </label>
+            <label>
+              Food/Spawn:
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={settings.foodSpawnCount}
+                onChange={e => setSettings(s => ({ ...s, foodSpawnCount: Number(e.target.value) }))}
+                style={{ width: "60px", marginLeft: 8 }}
+              />
+            </label>
+            <label style={{ display: "flex", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={settings.foodRecycleEnabled}
+                onChange={e => setSettings(s => ({ ...s, foodRecycleEnabled: e.target.checked }))}
+                style={{ marginRight: 6 }}
+              />
+              Food Recycle
+            </label>
+            <label>
+              Max Food/Agent:
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={settings.maxFoodPerAgent}
+                onChange={e => setSettings(s => ({ ...s, maxFoodPerAgent: Number(e.target.value) }))}
+                style={{ width: "60px", marginLeft: 8 }}
+                disabled={!settings.foodRecycleEnabled}
+              />
+            </label>
+          </div>
+          <button
+            onClick={createWorldFromSettings}
+            style={{ marginTop: 10, width: "100%" }}
+          >
+            Create New World with Settings
+          </button>
         </div>
 
         {/* Agent inspector */}
