@@ -9,6 +9,8 @@ interface Genes {
   reproductionThreshold: number; // energia needed to reproduce
   mutationRate: number;          // 0–1: chance each gene mutates
   traitId: number;               // lineage / random trait marker
+  riskTolerance: number;         // 0–1: willingness to act with lower energy
+  socialDrive: number;           // 0–1: preference for being near other agents
 }
 
 interface Memory {
@@ -21,6 +23,7 @@ interface Agent {
   y: number;
   energy: number; // "energia"
   sex: "M" | "F";
+  ageTicks: number;
   genes: Genes;
   memory: Memory;
   lastRule?: string;
@@ -83,22 +86,31 @@ const CONFIG = {
     exploration: { min: 0.3, max: 0.8 },
     reproductionThreshold: { min: 12, max: 20 },
     mutationRate: { min: 0.1, max: 0.3 },
+    riskTolerance: { min: 0.2, max: 0.8 },
+    socialDrive: { min: 0.2, max: 0.8 },
     mutation: {
       foodPreferenceMagnitude: 0.15,
       explorationMagnitude: 0.2,
       reproductionThresholdMagnitude: 3,
       mutationRateMagnitude: 0.05,
+      riskToleranceMagnitude: 0.15,
+      socialDriveMagnitude: 0.15,
       newTraitChance: 0.08,
       mutationRateEvolveMin: 0.01,
       mutationRateEvolveMax: 0.6,
       reproductionThresholdMin: 8,
       reproductionThresholdMax: 30,
     },
-  },
-  energy: {
+  },energy: {
     hungryCutoffRatio: 6,
     initialMin: 10,
     initialMax: 16,
+  },
+  time: {
+    yearsPerTick: 0.5,       // conversion from ticks → years
+    minReproAgeYears: 20,    // youngest reproductive age
+    maxReproAgeYears: 120,   // oldest reproductive age
+    maxAgeYears: 200         // lifespan limit
   },
 } as const;
 
@@ -246,7 +258,9 @@ function createRandomGenes(): Genes {
     exploration: CONFIG.genes.exploration.min + Math.random() * (CONFIG.genes.exploration.max - CONFIG.genes.exploration.min),
     reproductionThreshold: CONFIG.genes.reproductionThreshold.min + Math.random() * (CONFIG.genes.reproductionThreshold.max - CONFIG.genes.reproductionThreshold.min),
     mutationRate: CONFIG.genes.mutationRate.min + Math.random() * (CONFIG.genes.mutationRate.max - CONFIG.genes.mutationRate.min),
-    traitId: randomTraitId()
+    traitId: randomTraitId(),
+    riskTolerance: CONFIG.genes.riskTolerance.min + Math.random() * (CONFIG.genes.riskTolerance.max - CONFIG.genes.riskTolerance.min),
+    socialDrive: CONFIG.genes.socialDrive.min + Math.random() * (CONFIG.genes.socialDrive.max - CONFIG.genes.socialDrive.min),
   };
 }
 
@@ -268,6 +282,7 @@ function createInitialAgents(grid: Cell[][], count: number = INITIAL_AGENTS): Ag
       y,
       energy: CONFIG.energy.initialMin + randomInt(CONFIG.energy.initialMax - CONFIG.energy.initialMin),
       sex: Math.random() < 0.5 ? "M" : "F",
+      ageTicks: 0,
       genes: createRandomGenes(),
       memory: { qTable: {} },
       lastRule: "none"
@@ -300,7 +315,7 @@ function mutateValue(
   return value;
 }
 
-// Genetic memória + random trait generation
+// Genetic memory + random trait generation
 function mutateGenes(parent: Genes): Genes {
   const mutationRate = parent.mutationRate;
 
@@ -341,34 +356,84 @@ function mutateGenes(parent: Genes): Genes {
   const traitId =
     Math.random() < CONFIG.genes.mutation.newTraitChance ? randomTraitId() : parent.traitId;
 
+  // Mutate personality traits
+  const riskTolerance = mutateValue(
+    parent.riskTolerance,
+    mutationRate,
+    CONFIG.genes.mutation.riskToleranceMagnitude,
+    0.0,
+    1.0
+  );
+
+  const socialDrive = mutateValue(
+    parent.socialDrive,
+    mutationRate,
+    CONFIG.genes.mutation.socialDriveMagnitude,
+    0.0,
+    1.0
+  );
+
   return {
     foodPreference,
     exploration,
     reproductionThreshold,
     mutationRate: newMutationRate,
-    traitId
+    traitId,
+    riskTolerance,
+    socialDrive,
   };
 }
 
 /**
  * Combine genes from two parents for sexual reproduction.
- * Averages numeric gene fields, randomly picks traitId from one parent,
+ * Averages numeric gene fields, handles traitId inheritance,
  * then applies mutation.
  */
 function combineGenes(parent1: Genes, parent2: Genes): Genes {
   const avgMutationRate = (parent1.mutationRate + parent2.mutationRate) / 2;
+  
+  // For traitId: if same, keep it; if different, generate new
+  const combinedTraitId = parent1.traitId === parent2.traitId 
+    ? parent1.traitId 
+    : randomTraitId();
   
   const combinedGenes: Genes = {
     foodPreference: (parent1.foodPreference + parent2.foodPreference) / 2,
     exploration: (parent1.exploration + parent2.exploration) / 2,
     reproductionThreshold: (parent1.reproductionThreshold + parent2.reproductionThreshold) / 2,
     mutationRate: avgMutationRate,
-    // Randomly inherit traitId from one parent
-    traitId: Math.random() < 0.5 ? parent1.traitId : parent2.traitId
+    traitId: combinedTraitId,
+    riskTolerance: (parent1.riskTolerance + parent2.riskTolerance) / 2,
+    socialDrive: (parent1.socialDrive + parent2.socialDrive) / 2,
   };
   
   // Apply mutation to the combined genes
   return mutateGenes(combinedGenes);
+}
+
+/**
+ * Fertility factor based on age.
+ * Returns 0-1 representing reproductive probability.
+ * - 0 at/below minReproAgeYears
+ * - Ramps up to 1 at prime age (~28 years)
+ * - Ramps down to 0 at maxReproAgeYears
+ */
+function fertilityFactor(ageYears: number): number {
+  const minAge = CONFIG.time.minReproAgeYears;
+  const maxAge = CONFIG.time.maxReproAgeYears;
+  const primeAge = 28; // Peak fertility age
+
+  if (ageYears <= minAge || ageYears >= maxAge) {
+    return 0;
+  }
+
+  if (ageYears <= primeAge) {
+    // Ramp up from minAge to primeAge
+    return (ageYears - minAge) / (primeAge - minAge);
+  } else {
+    // Ramp down from primeAge to maxAge
+    return 1 - (ageYears - primeAge) / (maxAge - primeAge);
+  }
 }
 
 /**
@@ -445,7 +510,8 @@ function chooseAction(
 function decideMove(
   agent: Agent,
   grid: Cell[][],
-  stateKey: string
+  stateKey: string,
+  allAgents: Agent[]
 ): { dir: Direction; rule: string; action: Direction } {
   const { x, y, energy, genes } = agent;
 
@@ -470,6 +536,39 @@ function decideMove(
       rule: "Rule 1: seek food (hard survival)",
       action: choice.dir
     };
+  }
+
+  // SOCIAL DRIVE BIAS: if not starving and socialDrive is significant, bias movement
+  if (energy > hungryThreshold && Math.abs(genes.socialDrive - 0.5) > 0.1) {
+    // Count nearby agents for each neighbor cell (2-cell radius)
+    const neighborScores = neighbors.map(n => {
+      let nearbyAgentCount = 0;
+      for (const other of allAgents) {
+        if (other.id === agent.id) continue;
+        const dist = Math.abs(other.x - n.x) + Math.abs(other.y - n.y);
+        if (dist <= 2) nearbyAgentCount++;
+      }
+      return { ...n, score: nearbyAgentCount };
+    });
+
+    // High socialDrive prefers cells near agents; low socialDrive avoids them
+    const sortedByScore = [...neighborScores].sort((a, b) => {
+      if (genes.socialDrive > 0.5) {
+        return b.score - a.score; // Prefer cells with more nearby agents
+      } else {
+        return a.score - b.score; // Prefer cells with fewer nearby agents
+      }
+    });
+
+    // 30% chance to follow social preference instead of RL
+    if (Math.random() < 0.3 && sortedByScore.length > 0) {
+      const choice = sortedByScore[0];
+      return {
+        dir: choice.dir,
+        rule: genes.socialDrive > 0.5 ? "Social: seeking others" : "Social: avoiding others",
+        action: choice.dir
+      };
+    }
   }
 
   // RL-DRIVEN CHOICE
@@ -507,6 +606,9 @@ function stepWorld(
    * Track intended destinations to prevent multiple agents from moving to the same cell
    */
   const destinationMap = new Map<string, number>(); // "x,y" -> agentId
+  
+  // Track agents that have already reproduced this tick (each agent can only reproduce once)
+  const usedForRepro = new Set<number>();
 
   // Phase 1: Decide moves for all agents
   interface AgentMove {
@@ -522,7 +624,7 @@ function stepWorld(
 
     // RL state before move
     const stateKey = getStateKey(agent, grid);
-    const decision = decideMove(agent, grid, stateKey);
+    const decision = decideMove(agent, grid, stateKey, agents);
 
     // Use type-safe direction application
     const newPos = applyDirection(agent.x, agent.y, decision.dir);
@@ -578,17 +680,39 @@ function stepWorld(
     let reward = -1;
     if (ateFood) reward += CONFIG.simulation.foodEnergyBonus + richBonus;
 
+    // Increment age
+    const newAgeTicks = (agent.ageTicks ?? 0) + 1;
+    const ageYears = newAgeTicks * CONFIG.time.yearsPerTick;
+
     let parentAgent: Agent = {
       ...agent,
       x: finalX,
       y: finalY,
       energy: newEnergy,
-      lastRule: decision.rule
-    };    // REPRODUCTION (Sexual - requires opposite-sex mate)
-    const reproThreshold = parentAgent.genes.reproductionThreshold;
+      lastRule: decision.rule,
+      ageTicks: newAgeTicks,
+    };
+
+    // REPRODUCTION (Sexual - requires opposite-sex mate)
     let reproduced = false;
 
-    if (parentAgent.energy > reproThreshold) {
+    // Age-based reproduction rules
+    const ageYearsForRepro = parentAgent.ageTicks * CONFIG.time.yearsPerTick;
+    const canReproduceByAge =
+      ageYearsForRepro >= CONFIG.time.minReproAgeYears &&
+      ageYearsForRepro <= CONFIG.time.maxReproAgeYears;
+
+    // Risk tolerance affects effective reproduction threshold
+    // Higher risk tolerance = lower effective threshold (willing to reproduce with less energy)
+    const riskAdjustment = 1 - 0.3 * (parentAgent.genes.riskTolerance - 0.5);
+    const effectiveReproThreshold = parentAgent.genes.reproductionThreshold * riskAdjustment;
+
+    // Check if this agent hasn't already reproduced this tick
+    const canAttemptRepro = !usedForRepro.has(parentAgent.id) && 
+      canReproduceByAge && 
+      parentAgent.energy > effectiveReproThreshold;
+
+    if (canAttemptRepro) {
       // Find adjacent agents of opposite sex with sufficient energy
       const adjacentPositions = [
         { x: finalX, y: finalY - 1 },
@@ -599,85 +723,109 @@ function stepWorld(
         p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
       );
 
-      // Look for a mate - opposite sex agent with enough energy
+      // Look for a mate - opposite sex agent with enough energy, not already used for repro
       let mate: Agent | undefined;
       for (const pos of adjacentPositions) {
         const mateId = newGrid[pos.y][pos.x].agentId;
-        if (mateId !== undefined) {
+        if (mateId !== undefined && !usedForRepro.has(mateId)) {
           // Check both updatedAgents (already processed) and original agents
           const potentialMate = 
             updatedAgents.find(a => a.id === mateId) || 
             agents.find(a => a.id === mateId);
-          if (
-            potentialMate &&
-            potentialMate.sex !== parentAgent.sex &&
-            potentialMate.energy > potentialMate.genes.reproductionThreshold
-          ) {
-            mate = potentialMate;
-            break;
+          if (potentialMate) {
+            const mateAgeYears = potentialMate.ageTicks * CONFIG.time.yearsPerTick;
+            const mateCanReproByAge = mateAgeYears >= CONFIG.time.minReproAgeYears && 
+              mateAgeYears <= CONFIG.time.maxReproAgeYears;
+            const mateRiskAdjustment = 1 - 0.3 * (potentialMate.genes.riskTolerance - 0.5);
+            const mateEffectiveThreshold = potentialMate.genes.reproductionThreshold * mateRiskAdjustment;
+            
+            if (
+              potentialMate.sex !== parentAgent.sex &&
+              mateCanReproByAge &&
+              potentialMate.energy > mateEffectiveThreshold
+            ) {
+              mate = potentialMate;
+              break;
+            }
           }
         }
       }
 
       if (mate) {
-        // Find empty spots for child (not water, not occupied)
-        const neighborSpots = adjacentPositions.filter(
-          p =>
-            newGrid[p.y][p.x].agentId === undefined &&
-            newGrid[p.y][p.x].terrain !== "water" &&
-            !destinationMap.has(`${p.x},${p.y}`)
-        );
+        // Calculate fertility factor for both parents
+        const fertParent = fertilityFactor(ageYearsForRepro);
+        const fertMate = fertilityFactor(mate.ageTicks * CONFIG.time.yearsPerTick);
+        const combinedFert = Math.min(fertParent, fertMate);
 
-        if (neighborSpots.length > 0) {
-          const spot = neighborSpots[randomInt(neighborSpots.length)];
-
-          // Both parents contribute energy
-          const parentContribution = Math.floor(parentAgent.energy / 4);
-          const mateContribution = Math.floor(mate.energy / 4);
-          const childEnergy = parentContribution + mateContribution;
-
-          parentAgent = { ...parentAgent, energy: parentAgent.energy - parentContribution };
-
-          // Update mate's energy in the arrays
-          const mateInUpdated = updatedAgents.findIndex(a => a.id === mate!.id);
-          if (mateInUpdated !== -1) {
-            updatedAgents[mateInUpdated] = { 
-              ...updatedAgents[mateInUpdated], 
-              energy: updatedAgents[mateInUpdated].energy - mateContribution 
-            };
-          }
-
-          // Combine genes from both parents
-          const childGenes = combineGenes(parentAgent.genes, mate.genes);
-
-          // Child inherits qTable from first parent for genetic memory
-          const child: Agent = {
-            id: nextId++,
-            x: spot.x,
-            y: spot.y,
-            energy: childEnergy,
-            sex: Math.random() < 0.5 ? "M" : "F",
-            genes: childGenes,
-            memory: { qTable: { ...parentAgent.memory.qTable } },
-            lastRule: 'Born (sexual reproduction)'
-          };
-
-          newGrid[spot.y][spot.x].agentId = child.id;
-          destinationMap.set(`${spot.x},${spot.y}`, child.id);
-          updatedAgents.push(child);
-
-          reward += CONFIG.simulation.reproductionReward;
-          reproduced = true;
-
-          logs.push(
-            `Agent ${parentAgent.id}(${parentAgent.sex}) + ${mate.id}(${mate.sex}) → child ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}, energia ${childEnergy}`
+        // Roll fertility check - reproduction more likely at prime ages
+        if (Math.random() <= combinedFert) {
+          // Find empty spots for child (not water, not occupied)
+          const neighborSpots = adjacentPositions.filter(
+            p =>
+              newGrid[p.y][p.x].agentId === undefined &&
+              newGrid[p.y][p.x].terrain !== "water" &&
+              !destinationMap.has(`${p.x},${p.y}`)
           );
+
+          if (neighborSpots.length > 0) {
+            const spot = neighborSpots[randomInt(neighborSpots.length)];
+
+            // Both parents contribute energy (1/3 of total split between them)
+            const totalEnergy = parentAgent.energy + mate.energy;
+            const childEnergy = Math.floor(totalEnergy / 3);
+            const parentCost = Math.floor(childEnergy / 2);
+            const mateCost = childEnergy - parentCost;
+
+            parentAgent = { ...parentAgent, energy: parentAgent.energy - parentCost };
+
+            // Update mate's energy in the arrays
+            const mateInUpdated = updatedAgents.findIndex(a => a.id === mate!.id);
+            if (mateInUpdated !== -1) {
+              updatedAgents[mateInUpdated] = { 
+                ...updatedAgents[mateInUpdated], 
+                energy: updatedAgents[mateInUpdated].energy - mateCost 
+              };
+            }
+
+            // Mark both parents as having reproduced this tick
+            usedForRepro.add(parentAgent.id);
+            usedForRepro.add(mate.id);
+
+            // Combine genes from both parents
+            const childGenes = combineGenes(parentAgent.genes, mate.genes);
+
+            // Child inherits qTable from first parent for genetic memory
+            const child: Agent = {
+              id: nextId++,
+              x: spot.x,
+              y: spot.y,
+              energy: childEnergy,
+              sex: Math.random() < 0.5 ? "M" : "F",
+              ageTicks: 0,
+              genes: childGenes,
+              memory: { qTable: { ...parentAgent.memory.qTable } },
+              lastRule: 'Born (sexual reproduction)'
+            };
+
+            newGrid[spot.y][spot.x].agentId = child.id;
+            destinationMap.set(`${spot.x},${spot.y}`, child.id);
+            updatedAgents.push(child);
+
+            reward += CONFIG.simulation.reproductionReward;
+            reproduced = true;
+
+            logs.push(
+              `Agent ${parentAgent.id}(${parentAgent.sex}) + ${mate.id}(${mate.sex}) → child ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}, energy ${childEnergy}`
+            );
+          }
         }
       }
     }
 
-    // Determine if agent will die after this step
-    const isDeadAfterStep = parentAgent.energy <= 0;
+    // Determine if agent will die after this step (energy or old age)
+    const isTooOld = ageYears > CONFIG.time.maxAgeYears;
+    const isDeadAfterStep = parentAgent.energy <= 0 || isTooOld;
+    const deathReason = isTooOld ? "old age" : "low energy";
 
     // Apply death penalty BEFORE Q-update so the agent learns from death
     if (isDeadAfterStep) {
@@ -708,13 +856,13 @@ function stepWorld(
 
       logs.push(
         `Agent ${parentAgent.id} used ${decision.rule}, moved to (${parentAgent.x},${parentAgent.y})` +
-          (ateFood ? ` and ate food (+${CONFIG.simulation.foodEnergyBonus}${richBonus > 0 ? `+${richBonus} rich` : ""} energia)` : "") +
+          (ateFood ? ` and ate food (+${CONFIG.simulation.foodEnergyBonus}${richBonus > 0 ? `+${richBonus} rich` : ""} energy)` : "") +
           (reproduced ? " and reproduced (+2 reward)" : "") +
-          `, energia now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
+          `, energy now ${parentAgent.energy}, age ${ageYears.toFixed(1)}y, traitId=${parentAgent.genes.traitId}`
       );
     } else {
       logs.push(
-        `Agent ${agent.id} ran out of energia at (${finalX},${finalY}) and was removed.`
+        `Agent ${agent.id} died (${deathReason}) at (${finalX},${finalY}), age ${ageYears.toFixed(1)} years.`
       );
     }
   }
@@ -816,7 +964,7 @@ const TraitChart: React.FC<{
 }> = ({ last, watchedTraitId, onSelectTrait }) => {
   if (!last) return <p>No trait data yet.</p>;
   const entries = Object.entries(last.byTrait);
-  if (entries.length === 0) return <p>No agentes alive.</p>;
+  if (entries.length === 0) return <p>No agents alive.</p>;
 
   const sorted = entries.sort((a, b) => b[1] - a[1]).slice(0, 5);
   const maxCount = Math.max(...sorted.map(([, c]) => c), 1);
@@ -853,7 +1001,7 @@ const TraitChart: React.FC<{
   );
 };
 
-// Download world state as JSON ("guardar"/"speichere")
+// Download world state as JSON
 function downloadWorld(state: WorldState) {
   const blob = new Blob([JSON.stringify(state)], {
     type: "application/json"
@@ -1000,6 +1148,108 @@ const App: React.FC = () => {
     setWatchedTraitId(null);
   }, [settings]);
 
+  // God's Finger: Spawn replacement agents when population collapses
+  const godsFinger = useCallback(() => {
+    setAgents(prevAgents => {
+      const agents = [...prevAgents];
+      const gridCopy = grid.map(row => row.map(cell => ({ ...cell })));
+
+      // If zero agents: spawn 1 male + 1 female anywhere empty
+      if (agents.length === 0) {
+        const empties: { x: number; y: number }[] = [];
+        for (let y = 0; y < GRID_HEIGHT; y++)
+          for (let x = 0; x < GRID_WIDTH; x++)
+            if (!gridCopy[y][x].agentId && gridCopy[y][x].terrain !== "water") 
+              empties.push({ x, y });
+
+        if (empties.length < 2) return agents;
+
+        const pos1 = empties[Math.floor(Math.random() * empties.length)];
+        let pos2 = empties[Math.floor(Math.random() * empties.length)];
+        // Ensure different positions
+        while (pos2.x === pos1.x && pos2.y === pos1.y && empties.length > 1) {
+          pos2 = empties[Math.floor(Math.random() * empties.length)];
+        }
+
+        const nextId = 1;
+
+        const male: Agent = {
+          id: nextId,
+          x: pos1.x,
+          y: pos1.y,
+          energy: 20,
+          sex: "M",
+          ageTicks: 0,
+          genes: createRandomGenes(),
+          memory: { qTable: {} },
+          lastRule: "Spawned by God's Finger",
+        };
+
+        const female: Agent = {
+          id: nextId + 1,
+          x: pos2.x,
+          y: pos2.y,
+          energy: 20,
+          sex: "F",
+          ageTicks: 0,
+          genes: createRandomGenes(),
+          memory: { qTable: {} },
+          lastRule: "Spawned by God's Finger",
+        };
+
+        gridCopy[pos1.y][pos1.x].agentId = male.id;
+        gridCopy[pos2.y][pos2.x].agentId = female.id;
+
+        setGrid(gridCopy);
+        setLog(prev => ["God's Finger: Spawned M + F agents.", ...prev]);
+        return [male, female];
+      }
+
+      // If one agent: spawn an opposite-sex partner
+      if (agents.length === 1) {
+        const survivor = agents[0];
+        const targetSex: "M" | "F" = survivor.sex === "M" ? "F" : "M";
+
+        const empties: { x: number; y: number }[] = [];
+        for (let y = 0; y < GRID_HEIGHT; y++)
+          for (let x = 0; x < GRID_WIDTH; x++)
+            if (!gridCopy[y][x].agentId && gridCopy[y][x].terrain !== "water") 
+              empties.push({ x, y });
+
+        if (empties.length === 0) return agents;
+
+        const spot = empties[Math.floor(Math.random() * empties.length)];
+        const nextId = survivor.id + 1;
+
+        const partner: Agent = {
+          id: nextId,
+          x: spot.x,
+          y: spot.y,
+          energy: 20,
+          sex: targetSex,
+          ageTicks: 0,
+          genes: createRandomGenes(),
+          memory: { qTable: {} },
+          lastRule: "Spawned by God's Finger",
+        };
+
+        gridCopy[spot.y][spot.x].agentId = partner.id;
+
+        setGrid(gridCopy);
+        setLog(prev => [
+          `God's Finger: Spawned ${targetSex} partner (ID ${partner.id}) for survivor ${survivor.id}.`,
+          ...prev
+        ]);
+
+        return [...agents, partner];
+      }
+
+      // If 2+ agents: no intervention needed
+      setLog(prev => ["God's Finger: No action (population > 1).", ...prev]);
+      return agents;
+    });
+  }, [grid]);
+
   // Auto-run interval
   useEffect(() => {
     if (!isRunning) return;
@@ -1133,51 +1383,81 @@ const App: React.FC = () => {
         fileInputRef.current.value = "";
       }
     }
-  };
-
-  return (
+  };  return (
     <div
       style={{
         display: "flex",
-        height: "100vh",
-        fontFamily: "system-ui, sans-serif",
-        background: "#050814",
+        minHeight: "100vh",
+        fontFamily: "'Segoe UI', system-ui, -apple-system, sans-serif",
+        background: "linear-gradient(135deg, #050814 0%, #0a1628 100%)",
         color: "#f4f4f4",
-        padding: "12px",
+        padding: "20px",
         boxSizing: "border-box",
-        position: "relative"
+        position: "relative",
+        justifyContent: "center",
+        alignItems: "flex-start"
       }}
     >
       {/* Startup modal */}
       {showStartupModal && (
         <div
           style={{
-            position: "absolute",
+            position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.7)",
+            background: "rgba(0,0,0,0.8)",
+            backdropFilter: "blur(4px)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 10
+            zIndex: 100
           }}
         >
           <div
             style={{
-              background: "#151a30",
-              padding: "20px",
-              borderRadius: 10,
-              border: "1px solid #333",
-              maxWidth: 360
+              background: "linear-gradient(180deg, #1a2240 0%, #151a30 100%)",
+              padding: "28px",
+              borderRadius: 16,
+              border: "1px solid #334",
+              maxWidth: 380,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.5)"
             }}
           >
-            <h3>Welcome to the world</h3>
-            <p style={{ fontSize: 14, opacity: 0.9 }}>
-              Start a new "simulação"/world, or load a previously "guardada"/saved world
-              (JSON file).
+            <h3 style={{ margin: "0 0 12px 0", fontSize: 22 }}>Welcome to the World</h3>
+            <p style={{ fontSize: 14, opacity: 0.85, lineHeight: 1.5, margin: "0 0 20px 0" }}>
+              Start a new world, or load a previously saved world (JSON file).
             </p>
-            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-              <button onClick={handleStartupNew}>New world</button>
-              <button onClick={handleStartupLoad}>Load from file</button>
+            <div style={{ display: "flex", gap: 12 }}>
+              <button 
+                onClick={handleStartupNew}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  background: "linear-gradient(180deg, #4a6cf7 0%, #3b5ce4 100%)",
+                  border: "none",
+                  borderRadius: 8,
+                  color: "#fff",
+                  cursor: "pointer"
+                }}
+              >
+                New World
+              </button>
+              <button 
+                onClick={handleStartupLoad}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  background: "linear-gradient(180deg, #2a3a5a 0%, #1e2a45 100%)",
+                  border: "1px solid #445",
+                  borderRadius: 8,
+                  color: "#fff",
+                  cursor: "pointer"
+                }}              >
+                Load from File
+              </button>
             </div>
           </div>
         </div>
@@ -1190,22 +1470,33 @@ const App: React.FC = () => {
         style={{ display: "none" }}
         ref={fileInputRef}
         onChange={handleFileLoad}
-      />
-
-      {/* LEFT: World grid */}
-      <div style={{ flex: "0 0 auto", marginRight: "16px" }}>
-        <h2>NPC World – "memória genética" + RL</h2>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: `repeat(${GRID_WIDTH}, 22px)`,
-            gridTemplateRows: `repeat(${GRID_HEIGHT}, 22px)`,
-            gap: "2px",
-            border: "1px solid #444",
-            padding: "4px",
-            background: "#151a30"
-          }}
-        >
+      />      {/* Centered inner container */}
+      <div
+        style={{
+          display: "flex",
+          maxWidth: 1200,
+          width: "100%",
+          gap: "24px"
+        }}
+      >
+        {/* LEFT: World grid */}
+        <div style={{ flex: "0 0 auto" }}>
+          <h2 style={{ margin: "0 0 16px 0", fontSize: 20, fontWeight: 600 }}>
+            NPC World – Genetic Memory + RL
+          </h2>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: `repeat(${GRID_WIDTH}, 24px)`,
+              gridTemplateRows: `repeat(${GRID_HEIGHT}, 24px)`,
+              gap: "3px",
+              border: "1px solid #334",
+              padding: "8px",
+              background: "linear-gradient(180deg, #151a30 0%, #0f1422 100%)",
+              borderRadius: 12,
+              boxShadow: "0 4px 20px rgba(0,0,0,0.3)"
+            }}
+          >
           {renderedGrid.map((row, y) =>
             row.map((cell, x) => {
               // PERFORMANCE IMPROVEMENT: Use agentMap for O(1) lookup instead of O(n) find
@@ -1221,89 +1512,176 @@ const App: React.FC = () => {
               
               if (cell.food) bg = cell.terrain === "rich" ? "#4caf50" : "#2c9c3f"; // brighter green on rich
               if (agent) bg = colorForTrait(agent.genes.traitId);
-              if (cell.food && agent) bg = "#ffb300";
-
-              return (
+              if (cell.food && agent) bg = "#ffb300";              return (
                 <div
                   key={`${x}-${y}`}
                   onClick={() => agent && setSelectedAgentId(agent.id)}
                   style={{
-                    width: "22px",
-                    height: "22px",
-                    borderRadius: "4px",
+                    width: "24px",
+                    height: "24px",
+                    borderRadius: "5px",
                     background: bg,
                     border: isSelected
                       ? "2px solid #ffeb3b"
                       : isWatched
                       ? "2px solid #ff5252"
-                      : "1px solid #333",
+                      : "1px solid rgba(255,255,255,0.1)",
                     boxSizing: "border-box",
-                    cursor: agent ? "pointer" : "default"
+                    cursor: agent ? "pointer" : "default",
+                    transition: "transform 0.1s ease",
+                    boxShadow: agent ? "0 2px 8px rgba(0,0,0,0.3)" : "none"
                   }}
                   title={
                     agent
-                      ? `Agent ${agent.id} – energia ${agent.energy}, traitId ${agent.genes.traitId}`
+                      ? `Agent ${agent.id} – energy ${agent.energy}, traitId ${agent.genes.traitId}`
                       : cell.food
                       ? "Food"
                       : ""
-                  }
-                />
+                  }                />
               );
             })
           )}
-        </div>
-
-        <div style={{ marginTop: "12px" }}>
-          <button onClick={handleStep} style={{ marginRight: "8px" }}>
-            Step
-          </button>
-          <button
-            onClick={() => setIsRunning(r => !r)}
-            style={{ marginRight: "8px" }}
-          >
-            {isRunning ? "Pause" : "Play"}
-          </button>
-          <button onClick={handleReset}>Reset World</button>
-          <button
-            onClick={() => downloadWorld({ grid, agents, tick, history })}
-            style={{ marginLeft: 8 }}
-          >
-            Save World (JSON)
-          </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            style={{ marginLeft: 8 }}
-          >
-            Load World
-          </button>
-          <div style={{ marginTop: 8, fontSize: 12 }}>
-            Speed:{" "}
-            <input
-              type="range"
-              min={100}
-              max={1200}
-              step={100}
-              value={speedMs}
-              onChange={e => setSpeedMs(Number(e.target.value))}
-            />{" "}
-            {speedMs} ms/tick
           </div>
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-            <div>Tick: {tick} | Agentes: {agents.length}</div>
-            <div style={{ marginTop: 4 }}>
-              <strong>Keyboard shortcuts:</strong> Space (Play/Pause), → (Step), R (Reset)
+
+          <div style={{ marginTop: "16px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
+            <button 
+              onClick={handleStep} 
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: "linear-gradient(180deg, #3a4a6a 0%, #2a3a55 100%)",
+                border: "1px solid #445",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              Step
+            </button>
+            <button
+              onClick={() => setIsRunning(r => !r)}
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: isRunning 
+                  ? "linear-gradient(180deg, #c9a227 0%, #a88620 100%)" 
+                  : "linear-gradient(180deg, #4a6cf7 0%, #3b5ce4 100%)",
+                border: "none",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              {isRunning ? "Pause" : "Play"}
+            </button>
+            <button 
+              onClick={handleReset}
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: "linear-gradient(180deg, #3a4a6a 0%, #2a3a55 100%)",
+                border: "1px solid #445",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              Reset
+            </button>
+            <button
+              onClick={() => downloadWorld({ grid, agents, tick, history })}
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: "linear-gradient(180deg, #2d5a3d 0%, #234530 100%)",
+                border: "1px solid #3a5",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              Save
+            </button>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: "linear-gradient(180deg, #3a4a6a 0%, #2a3a55 100%)",
+                border: "1px solid #445",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              Load
+            </button>
+            <button
+              onClick={godsFinger}
+              style={{
+                padding: "8px 16px",
+                fontSize: 13,
+                fontWeight: 500,
+                background: "linear-gradient(180deg, #6a3a6a 0%, #553055 100%)",
+                border: "1px solid #858",
+                borderRadius: 6,
+                color: "#fff",
+                cursor: "pointer"
+              }}
+            >
+              God&apos;s Finger
+            </button>
+          </div>
+          
+          <div style={{ marginTop: 16, fontSize: 13 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              Speed:
+              <input
+                type="range"
+                min={100}
+                max={1200}
+                step={100}
+                value={speedMs}
+                onChange={e => setSpeedMs(Number(e.target.value))}
+                style={{ flex: 1, maxWidth: 150 }}
+              />
+              <span style={{ opacity: 0.7, minWidth: 70 }}>{speedMs} ms</span>
+            </label>
+          </div>
+          
+          <div style={{ 
+            marginTop: 12, 
+            padding: "10px 12px", 
+            background: "rgba(255,255,255,0.05)", 
+            borderRadius: 8,
+            fontSize: 13
+          }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>
+              Tick: {tick} &nbsp;|&nbsp; Agents: {agents.length}
+            </div>
+            <div style={{ opacity: 0.6, fontSize: 11 }}>
+              Shortcuts: Space (Play/Pause), → (Step), R (Reset)
             </div>
           </div>
+          
           {loadError && (
-            <div style={{ marginTop: 8, padding: 8, background: "#8b0000", borderRadius: 4, fontSize: 12 }}>
-              Error: {loadError}
+            <div style={{ 
+              marginTop: 12, 
+              padding: "10px 12px", 
+              background: "linear-gradient(180deg, #6b1a1a 0%, #4a1212 100%)", 
+                            borderRadius: 8, 
+              fontSize: 12,
+              border: "1px solid #933"
+            }}>              Error: {loadError}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* RIGHT: Side panel */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        </div>        {/* RIGHT: Side panel */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* Statistics Display */}
         <div
           style={{
@@ -1314,7 +1692,7 @@ const App: React.FC = () => {
             border: "1px solid #333"
           }}
         >
-          <h3>Statistics – "Estatísticas"</h3>
+          <h3>Statistics</h3>
           <div style={{ fontSize: "0.9em" }}>
             <p>
               <strong>Avg Energy:</strong> {stats.avgEnergy.toFixed(2)} |{" "}
@@ -1412,9 +1790,7 @@ const App: React.FC = () => {
           >
             Create New World with Settings
           </button>
-        </div>
-
-        {/* Agent inspector */}
+        </div>        {/* Agent inspector */}
         <div
           style={{
             marginBottom: "12px",
@@ -1424,20 +1800,23 @@ const App: React.FC = () => {
             border: "1px solid #333"
           }}
         >
-          <h3>Agent Inspector – "agente" / "Figur"</h3>
+          <h3>Agent Inspector</h3>
           {selectedAgent ? (
             <>
               <p>
-                <strong>ID:</strong> {selectedAgent.id}
+                <strong>ID:</strong> {selectedAgent.id} | <strong>Sex:</strong> {selectedAgent.sex}
               </p>
               <p>
                 <strong>Position:</strong> ({selectedAgent.x},{selectedAgent.y})
+              </p>              <p>
+                <strong>Energy:</strong> {selectedAgent.energy}
               </p>
               <p>
-                <strong>Energia:</strong> {selectedAgent.energy}
+                <strong>Age:</strong> {selectedAgent.ageTicks} ticks (~
+                {(selectedAgent.ageTicks * CONFIG.time.yearsPerTick).toFixed(1)} years)
               </p>
               <p>
-                <strong>Last Rule ("Regra" / "Regle"):</strong>{" "}
+                <strong>Last Rule:</strong>{" "}
                 {selectedAgent.lastRule}
               </p>
               <p>
@@ -1448,15 +1827,15 @@ const App: React.FC = () => {
                 reproThresh={selectedAgent.genes.reproductionThreshold.toFixed(1)},{" "}
                 mutationRate={selectedAgent.genes.mutationRate.toFixed(2)}
                 <br />
+                <strong>Personality:</strong> riskTolerance={selectedAgent.genes.riskTolerance.toFixed(2)},{" "}
+                socialDrive={selectedAgent.genes.socialDrive.toFixed(2)}
+                <br />
                 traitId={selectedAgent.genes.traitId}
               </p>
-            </>
-          ) : (
-            <p>Click an agente in the grid to inspect its "memória genética".</p>
+            </>          ) : (
+            <p>Click an agent in the grid to inspect its genetic memory.</p>
           )}
-        </div>
-
-        {/* Rules + RL + evolution description */}
+        </div>        {/* Rules + RL + evolution description */}
         <div
           style={{
             marginBottom: "12px",
@@ -1466,7 +1845,7 @@ const App: React.FC = () => {
             border: "1px solid #333"
           }}
         >
-          <h3>Behavior, RL & Evolution</h3>
+          <h3>Behavior, Reinforcement Learning & Evolution</h3>
           <ul style={{ fontSize: "0.9em" }}>
             <li>
               <strong>Hard Rule:</strong> if hungry and food is adjacent, move
@@ -1477,13 +1856,11 @@ const App: React.FC = () => {
               up/down/left/right/stay to maximize future reward.
             </li>
             <li>
-              <strong>Reproduction:</strong> if energia &gt; reproductionThreshold,
-              agente may split energia with a child, whose genes are mutated.
+              <strong>Reproduction:</strong> if energy &gt; reproductionThreshold,
+              agent may split energy with a child, whose genes are mutated.
             </li>
           </ul>
-        </div>
-
-        {/* Charts */}
+        </div>        {/* Charts */}
         <div
           style={{
             marginBottom: "12px",
@@ -1493,11 +1870,9 @@ const App: React.FC = () => {
             border: "1px solid #333"
           }}
         >
-          <h3>Population Over Time – "população"</h3>
+          <h3>Population Over Time</h3>
           <PopulationChart history={history} />
-        </div>
-
-        <div
+        </div>        <div
           style={{
             marginBottom: "12px",
             padding: "10px",
@@ -1507,7 +1882,7 @@ const App: React.FC = () => {
           }}
         >
           <h3>
-            Trait Distribution – "famílias" / "Stämme"
+            Trait Distribution
             {watchedTraitId !== null && (
               <span style={{ fontSize: 12, marginLeft: 8 }}>
                 Watching traitId {watchedTraitId}
@@ -1519,9 +1894,7 @@ const App: React.FC = () => {
             watchedTraitId={watchedTraitId}
             onSelectTrait={tid => setWatchedTraitId(tid)}
           />
-        </div>
-
-        {/* Log */}
+        </div>        {/* Log */}
         <div
           style={{
             flex: 1,
@@ -1532,12 +1905,11 @@ const App: React.FC = () => {
             overflowY: "auto"
           }}
         >
-          <h3>Action Log – "histórico" / "Protokoll"</h3>
+          <h3>Action Log</h3>
           {log.length === 0 ? (
             <p>No steps yet. Press "Step" or "Play" to advance the world.</p>
           ) : (
-            <ul style={{ paddingLeft: "18px" }}>
-              {log.map((entry, i) => (
+            <ul style={{ paddingLeft: "18px" }}>              {log.map((entry, i) => (
                 <li key={i} style={{ fontSize: "0.8em" }}>
                   {entry}
                 </li>
@@ -1545,6 +1917,7 @@ const App: React.FC = () => {
             </ul>
           )}
         </div>
+      </div>
       </div>
     </div>
   );
