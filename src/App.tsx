@@ -53,10 +53,10 @@ const CONFIG = {
     height: 10,
   },
   simulation: {
-    initialAgents: 6,
-    initialFood: 18,
-    foodSpawnChance: 0.6,
-    foodSpawnCount: 1,
+    initialAgents: 8,
+    initialFood: 20,
+    foodSpawnChance: 0.75,
+    foodSpawnCount: 2,
     baseEnergyCost: 1,
     foodEnergyBonus: 5,
     reproductionReward: 2,
@@ -70,7 +70,7 @@ const CONFIG = {
   genes: {
     foodPreference: { min: 0.6, max: 1.0 },
     exploration: { min: 0.3, max: 0.8 },
-    reproductionThreshold: { min: 15, max: 23 },
+    reproductionThreshold: { min: 12, max: 20 },
     mutationRate: { min: 0.1, max: 0.3 },
     mutation: {
       foodPreferenceMagnitude: 0.15,
@@ -490,16 +490,15 @@ function stepWorld(
         const spot = neighborSpots[randomInt(neighborSpots.length)];
 
         const childEnergy = Math.floor(parentAgent.energy / 2);
-        parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
-
-        const childGenes = mutateGenes(parentAgent.genes);
+        parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };        const childGenes = mutateGenes(parentAgent.genes);
+        // Child inherits a shallow copy of parent's qTable for genetic memory
         const child: Agent = {
           id: nextId++,
           x: spot.x,
           y: spot.y,
           energy: childEnergy,
           genes: childGenes,
-          memory: { qTable: {} },
+          memory: { qTable: { ...parentAgent.memory.qTable } },
           lastRule: 'Born (memória genética + "Mutation")'
         };
 
@@ -512,8 +511,15 @@ function stepWorld(
 
         logs.push(
           `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}`
-        );
-      }
+        );      }
+    }
+
+    // Determine if agent will die after this step
+    const isDeadAfterStep = parentAgent.energy <= 0;
+
+    // Apply death penalty BEFORE Q-update so the agent learns from death
+    if (isDeadAfterStep) {
+      reward -= CONFIG.simulation.deathPenalty;
     }
 
     // RL UPDATE
@@ -534,7 +540,7 @@ function stepWorld(
 
     parentAgent = { ...parentAgent, memory: { qTable: newQTable } };
 
-    if (parentAgent.energy > 0) {
+    if (!isDeadAfterStep) {
       updatedAgents.push(parentAgent);
       newGrid[parentAgent.y][parentAgent.x].agentId = parentAgent.id;
 
@@ -545,7 +551,6 @@ function stepWorld(
           `, energia now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
       );
     } else {
-      reward -= CONFIG.simulation.deathPenalty;
       logs.push(
         `Agent ${agent.id} ran out of energia at (${finalX},${finalY}) and was removed.`
       );
