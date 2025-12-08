@@ -7,6 +7,12 @@ import {
   getScienceBonuses,
   type ScienceState 
 } from './science-system';
+import {
+  exportInventionHistory,
+  exportEvolutionData,
+  exportScienceLogs,
+  exportCompleteData,
+} from './utils';
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -1517,6 +1523,40 @@ const App: React.FC = () => {
           >
             Load World
           </button>
+          
+          {/* DATA EXPORT BUTTONS */}
+          <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              onClick={() => exportInventionHistory({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export all invention discoveries and agent invention data"
+            >
+              📜 Export Inventions
+            </button>
+            <button
+              onClick={() => exportEvolutionData({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export population dynamics and genetic evolution data"
+            >
+              🧬 Export Evolution
+            </button>
+            <button
+              onClick={() => exportScienceLogs({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export scientific discoveries and era progression"
+              disabled={!scienceState}
+            >
+              🔬 Export Science
+            </button>
+            <button
+              onClick={() => exportCompleteData({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export complete simulation data (all systems)"
+            >
+              💾 Export All Data
+            </button>
+          </div>
+          
           <div style={{ marginTop: 8, fontSize: 12 }}>
             Speed:{" "}
             <input

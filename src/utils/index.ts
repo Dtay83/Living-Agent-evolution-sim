@@ -158,3 +158,11 @@ export function mutateValue(
   }
   return value;
 }
+
+// Export data export utilities
+export {
+  exportInventionHistory,
+  exportEvolutionData,
+  exportScienceLogs,
+  exportCompleteData,
+} from './exportData';
