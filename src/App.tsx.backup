@@ -87,8 +87,6 @@ interface WorldState {
   tick: number;
   history: HistoryPoint[];
   discoveries: DiscoveryEvent[];  // NEW: Track all discoveries
-  gridWidth: number;   // Track current grid width (can expand)
-  gridHeight: number;  // Track current grid height (can expand)
 }
 
 /**
@@ -97,11 +95,8 @@ interface WorldState {
  */
 const CONFIG = {
   grid: {
-    initialWidth: 16,
-    initialHeight: 10,
-    maxWidth: 50,         // Maximum grid width before performance issues
-    maxHeight: 30,        // Maximum grid height
-    expandBy: 2,          // Number of cells to add when expanding
+    width: 16,
+    height: 10,
   },
   simulation: {
     initialAgents: 6,
@@ -150,9 +145,9 @@ const CONFIG = {
   },
 } as const;
 
-// Grid dimensions (dynamic - will update as grid expands)
-let GRID_WIDTH = CONFIG.grid.initialWidth;
-let GRID_HEIGHT = CONFIG.grid.initialHeight;
+// Backwards compatibility aliases
+const GRID_WIDTH = CONFIG.grid.width;
+const GRID_HEIGHT = CONFIG.grid.height;
 const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
 const INITIAL_FOOD = CONFIG.simulation.initialFood;
 const ALPHA = CONFIG.rl.alpha;
@@ -275,40 +270,10 @@ function applyDirection(
   };
 }
 
-function createEmptyGrid(width?: number, height?: number): Cell[][] {
-  const w = width || GRID_WIDTH;
-  const h = height || GRID_HEIGHT;
-  return Array.from({ length: h }, () =>
-    Array.from({ length: w }, () => ({ food: false } as Cell))
+function createEmptyGrid(): Cell[][] {
+  return Array.from({ length: GRID_HEIGHT }, () =>
+    Array.from({ length: GRID_WIDTH }, () => ({ food: false } as Cell))
   );
-}
-
-/**
- * Expands the grid by adding rows/columns when needed for reproduction
- */
-function expandGrid(
-  grid: Cell[][], 
-  direction: 'right' | 'bottom' | 'both',
-  expandBy: number = 2
-): Cell[][] {
-  if (direction === 'right' || direction === 'both') {
-    // Add columns to the right
-    grid = grid.map(row => [
-      ...row,
-      ...Array.from({ length: expandBy }, () => ({ food: false } as Cell))
-    ]);
-  }
-  
-  if (direction === 'bottom' || direction === 'both') {
-    // Add rows to the bottom
-    const newWidth = grid[0]?.length || GRID_WIDTH;
-    const newRows = Array.from({ length: expandBy }, () =>
-      Array.from({ length: newWidth }, () => ({ food: false } as Cell))
-    );
-    grid = [...grid, ...newRows];
-  }
-  
-  return grid;
 }
 
 function randomInt(max: number) {
@@ -712,13 +677,7 @@ function stepWorld(
   agents: Agent[],
   grid: Cell[][],
   tick: number
-): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[]; gridExpanded: boolean } {
-  // Update grid dimensions
-  const currentHeight = grid.length;
-  const currentWidth = grid[0]?.length || GRID_WIDTH;
-  GRID_WIDTH = currentWidth;
-  GRID_HEIGHT = currentHeight;
-  
+): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[] } {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
   );
@@ -726,7 +685,6 @@ function stepWorld(
   const logs: string[] = [];
   const updatedAgents: Agent[] = [];
   const discoveries: DiscoveryEvent[] = [];
-  let gridExpanded = false;
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -830,7 +788,7 @@ function stepWorld(
     const effectiveEnergy = parentAgent.energy + reproBonus;
 
     if (effectiveEnergy > reproThreshold) {
-      let neighborSpots = [
+      const neighborSpots = [
         { x: finalX, y: finalY - 1 },
         { x: finalX, y: finalY + 1 },
         { x: finalX - 1, y: finalY },
@@ -844,48 +802,6 @@ function stepWorld(
           newGrid[p.y][p.x].agentId === undefined &&
           !destinationMap.has(`${p.x},${p.y}`) // Also check collision map
       );
-
-      // Grid expansion when no space available
-      if (neighborSpots.length === 0 && 
-          (GRID_WIDTH < CONFIG.grid.maxWidth || GRID_HEIGHT < CONFIG.grid.maxHeight)) {
-        
-        // Determine expansion direction
-        let expandDirection: 'right' | 'bottom' | 'both' = 'both';
-        if (finalX >= GRID_WIDTH - 2 && GRID_WIDTH < CONFIG.grid.maxWidth) {
-          expandDirection = 'right';
-        } else if (finalY >= GRID_HEIGHT - 2 && GRID_HEIGHT < CONFIG.grid.maxHeight) {
-          expandDirection = 'bottom';
-        }
-        
-        // Expand the grid
-        const expandedGrid = expandGrid(newGrid, expandDirection, CONFIG.grid.expandBy);
-        Object.assign(newGrid, expandedGrid);
-        newGrid.length = expandedGrid.length;
-        
-        const newWidth = expandedGrid[0]?.length || GRID_WIDTH;
-        const newHeight = expandedGrid.length;
-        GRID_WIDTH = newWidth;
-        GRID_HEIGHT = newHeight;
-        gridExpanded = true;
-        
-        logs.push(`Grid expanded to ${newWidth}×${newHeight} to accommodate population growth!`);
-        
-        // Recalculate neighbor spots
-        neighborSpots = [
-          { x: finalX, y: finalY - 1 },
-          { x: finalX, y: finalY + 1 },
-          { x: finalX - 1, y: finalY },
-          { x: finalX + 1, y: finalY }
-        ].filter(
-          p =>
-            p.x >= 0 &&
-            p.x < GRID_WIDTH &&
-            p.y >= 0 &&
-            p.y < GRID_HEIGHT &&
-            newGrid[p.y]?.[p.x]?.agentId === undefined &&
-            !destinationMap.has(`${p.x},${p.y}`)
-        );
-      }
 
       if (neighborSpots.length > 0) {
         const spot = neighborSpots[randomInt(neighborSpots.length)];
@@ -978,10 +894,10 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, gridExpanded };
+    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, gridExpanded };
+  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries };
 }
 
 /**
@@ -1206,8 +1122,6 @@ const App: React.FC = () => {
   
   const [grid, setGrid] = useState<Cell[][]>(initialWorld.grid);
   const [agents, setAgents] = useState<Agent[]>(initialWorld.agents);
-  const [gridWidth, setGridWidth] = useState(CONFIG.grid.initialWidth);
-  const [gridHeight, setGridHeight] = useState(CONFIG.grid.initialHeight);
 
   const [log, setLog] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
@@ -1239,15 +1153,15 @@ const App: React.FC = () => {
     for (const agent of agents) {
       if (
         agent.x >= 0 &&
-        agent.x < gridWidth &&
+        agent.x < GRID_WIDTH &&
         agent.y >= 0 &&
-        agent.y < gridHeight
+        agent.y < GRID_HEIGHT
       ) {
         copy[agent.y][agent.x].agentId = agent.id;
       }
     }
     return copy;
-  }, [grid, agents, gridWidth, gridHeight]);
+  }, [grid, agents]);
 
   const selectedAgent = useMemo(
     () => agents.find(a => a.id === selectedAgentId) || null,
@@ -1268,7 +1182,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleStep = useCallback(() => {
-    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries, gridExpanded } = stepWorld(
+    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
       agents,
       renderedGrid,
       tickRef.current
@@ -1277,14 +1191,10 @@ const App: React.FC = () => {
     setTick(newTick);
     setAgents(newAgents);
     setGrid(newGrid);
-    if (gridExpanded) {
-      setGridWidth(newGrid[0]?.length || gridWidth);
-      setGridHeight(newGrid.length);
-    }
     setLog(prev => [...newLog, ...prev].slice(0, 80));
     setDiscoveries(prev => [...prev, ...newDiscoveries]);
     pushHistory(newAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, gridWidth]);
+  }, [agents, renderedGrid, pushHistory]);
 
   const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
@@ -1402,34 +1312,27 @@ const App: React.FC = () => {
       // discoveries is optional for backwards compatibility
       const parsedDiscoveries = parsed.discoveries || [];
       
-      // Grid dimensions are dynamic - load from state or infer from grid
-      const loadedWidth = parsed.gridWidth || parsed.grid[0]?.length || CONFIG.grid.initialWidth;
-      const loadedHeight = parsed.gridHeight || parsed.grid.length;
-      
-      // Update global dimensions
-      GRID_WIDTH = loadedWidth;
-      GRID_HEIGHT = loadedHeight;
+      // Validate grid dimensions
+      if (parsed.grid.length !== GRID_HEIGHT || parsed.grid[0]?.length !== GRID_WIDTH) {
+        throw new Error(
+          `Invalid grid dimensions: expected ${GRID_WIDTH}x${GRID_HEIGHT}, got ${parsed.grid[0]?.length}x${parsed.grid.length}`
+        );
+      }
       
       // Validate agent positions
       for (const agent of parsed.agents) {
-        if (agent.x < 0 || agent.x >= loadedWidth || agent.y < 0 || agent.y >= loadedHeight) {
+        if (agent.x < 0 || agent.x >= GRID_WIDTH || agent.y < 0 || agent.y >= GRID_HEIGHT) {
           throw new Error(`Invalid agent position: Agent ${agent.id} at (${agent.x},${agent.y})`);
-        }
-        // Add inventionPoints if missing (backward compatibility)
-        if (agent.inventionPoints === undefined) {
-          agent.inventionPoints = 0;
         }
       }
       
       // All validations passed
       setGrid(parsed.grid);
       setAgents(parsed.agents);
-      setGridWidth(loadedWidth);
-      setGridHeight(loadedHeight);
       setTick(parsed.tick);
       setHistory(parsed.history);
       setDiscoveries(parsedDiscoveries);
-      setLog([`World loaded successfully from ${file.name} (${loadedWidth}×${loadedHeight})`]);
+      setLog([`World loaded successfully from ${file.name}`]);
       setSelectedAgentId(null);
       setIsRunning(false);
       setWatchedTraitId(null);
@@ -1571,7 +1474,7 @@ const App: React.FC = () => {
           </button>
           <button onClick={handleReset}>Reset World</button>
           <button
-            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries, gridWidth, gridHeight })}
+            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries })}
             style={{ marginLeft: 8 }}
           >
             Save World (JSON)
