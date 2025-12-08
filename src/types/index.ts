@@ -105,6 +105,8 @@ export interface WorldState {
   discoveries: DiscoveryEvent[];
   gridWidth: number;   // Current grid width (can expand)
   gridHeight: number;  // Current grid height (can expand)
+  scienceState?: any;  // ScienceState (optional for backward compatibility)
+  scienceLog?: any;    // ScienceLog (optional for backward compatibility)
 }
 
 /**
