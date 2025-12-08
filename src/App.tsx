@@ -1,5 +1,18 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { PopulationChart, TraitChart, DiscoveryTimeline, InventionStats, ScienceProgressPanel } from './ui-components';
+import { 
+  initializeScienceSystem, 
+  updateScienceSystem, 
+  getScienceBonuses,
+  type ScienceState 
+} from './science-system';
+import {
+  exportInventionHistory,
+  exportEvolutionData,
+  exportScienceLogs,
+  exportCompleteData,
+} from './utils';
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -26,6 +39,12 @@ interface Genes {
   reproductionThreshold: number; // energia needed to reproduce
   mutationRate: number;          // 0–1: chance each gene mutates
   traitId: number;               // lineage / random trait marker
+  
+  // NEW: Learning & invention genes
+  curiosity: number;             // 0–1: likelihood of discovering new things
+  social: number;                // 0–1: ability to teach/learn from others
+  creativity: number;            // 0–1: scales the quality and power of discovered inventions
+  patience: number;              // 0–1: influences storage capacity and long-term benefits
   riskTolerance: number;         // 0–1: willingness to act with lower energy
   socialDrive: number;           // 0–1: preference for being near other agents
   intelligence: number;          // 0–1: ability to learn/discover new things
@@ -35,6 +54,43 @@ interface Genes {
 interface Memory {
   qTable: Record<string, number>; // RL value table: (state|action) -> Q
   knowledge: Knowledge;           // learned skills and discoveries
+}
+
+/**
+ * INVENTION SYSTEM
+ * 
+ * Agents can discover "inventions" that provide gameplay advantages.
+ * Discovery is influenced by:
+ * - Energy level (need cognitive surplus)
+ * - Curiosity gene (higher = more likely to discover)
+ * - Prerequisites (tech tree structure)
+ * 
+ * Inventions can be passed to offspring based on the social gene,
+ * simulating cultural/knowledge transmission.
+ */
+
+type InventionEffect = 
+  | { type: 'energy_efficiency'; multiplier: number }
+  | { type: 'food_detection_range'; range: number }
+  | { type: 'reproduction_boost'; bonus: number }
+  | { type: 'defense'; protection: number }
+  | { type: 'storage'; capacity: number };
+
+interface Invention {
+  id: string;
+  name: string;
+  type: 'tool' | 'technique' | 'structure';
+  effect: InventionEffect;
+  discoveredAt: number;      // tick when invented
+  discoveredBy: number;      // agent ID
+  requirements: string[];    // prerequisites to use
+  description?: string;      // human-readable description
+}
+
+interface DiscoveryEvent {
+  tick: number;
+  agentId: number;
+  invention: Invention;
 }
 
 interface Agent {
@@ -47,6 +103,8 @@ interface Agent {
   genes: Genes;
   memory: Memory;
   lastRule?: string;
+  inventions: Invention[];  // Things this agent has discovered
+  inventionPoints: number;  // Accumulated creativity points for discovering new inventions
   // Pregnancy/reproduction state
   pregnantWith?: {
     mateId: number;
@@ -89,6 +147,10 @@ interface WorldState {
   agents: Agent[];
   tick: number;
   history: HistoryPoint[];
+  discoveries: DiscoveryEvent[];  // NEW: Track all discoveries
+  gridWidth: number;   // Track current grid width (can expand)
+  gridHeight: number;  // Track current grid height (can expand)
+  scienceState?: ScienceState;  // NEW: Scientific progress tracking
 }
 
 interface SimulationSettings {
@@ -106,8 +168,11 @@ interface SimulationSettings {
  */
 const CONFIG = {
   grid: {
-    width: 16,
-    height: 10,
+    initialWidth: 16,
+    initialHeight: 10,
+    maxWidth: 50,         // Maximum grid width before performance issues
+    maxHeight: 30,        // Maximum grid height
+    expandBy: 2,          // Number of cells to add when expanding
   },
   simulation: {
     initialAgents: 8,
@@ -129,6 +194,12 @@ const CONFIG = {
   genes: {
     foodPreference: { min: 0.6, max: 1.0 },
     exploration: { min: 0.3, max: 0.8 },
+    reproductionThreshold: { min: 15, max: 23 },
+    mutationRate: { min: 0.1, max: 0.3 },
+    curiosity: { min: 0.2, max: 0.8 },
+    social: { min: 0.3, max: 0.9 },
+    creativity: { min: 0.1, max: 0.7 },
+    patience: { min: 0.2, max: 0.8 },
     reproductionThreshold: { min: 10, max: 18 }, // lowered to make reproduction easier
     mutationRate: { min: 0.12, max: 0.35 },      // slightly higher mutation rates
     riskTolerance: { min: 0.2, max: 0.8 },
@@ -136,6 +207,17 @@ const CONFIG = {
     mutation: {
       foodPreferenceMagnitude: 0.15,
       explorationMagnitude: 0.2,
+      reproductionThresholdMagnitude: 3,
+      mutationRateMagnitude: 0.05,
+      curiosityMagnitude: 0.15,
+      socialMagnitude: 0.15,
+      creativityMagnitude: 0.15,
+      patienceMagnitude: 0.15,
+      newTraitChance: 0.08,
+      mutationRateEvolveMin: 0.01,
+      mutationRateEvolveMax: 0.6,
+      reproductionThresholdMin: 8,
+      reproductionThresholdMax: 30,
       reproductionThresholdMagnitude: 2,         // smaller mutations to threshold
       mutationRateMagnitude: 0.06,               // mutation rate can evolve more
       riskToleranceMagnitude: 0.15,
@@ -187,14 +269,103 @@ const CONFIG = {
   },
 } as const;
 
-// Backwards compatibility aliases
-const GRID_WIDTH = CONFIG.grid.width;
-const GRID_HEIGHT = CONFIG.grid.height;
+// Grid dimensions (dynamic - will update as grid expands)
+let GRID_WIDTH = CONFIG.grid.initialWidth;
+let GRID_HEIGHT = CONFIG.grid.initialHeight;
 const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
 const INITIAL_FOOD = CONFIG.simulation.initialFood;
 const ALPHA = CONFIG.rl.alpha;
 const GAMMA = CONFIG.rl.gamma;
 const EPSILON = CONFIG.rl.epsilon;
+
+/**
+ * LIMITLESS INVENTION SYSTEM
+ * 
+ * Instead of a fixed tech tree, inventions are procedurally generated based on:
+ * - Agent's creativity and curiosity genes
+ * - Invention points accumulated through exploration and survival
+ * - Random inspiration that creates unique, emergent inventions
+ * 
+ * This allows for unlimited creativity with no cap on discoveries.
+ */
+
+// Invention name components for procedural generation
+const INVENTION_PREFIXES = [
+  'Efficient', 'Advanced', 'Enhanced', 'Optimized', 'Swift', 'Powerful',
+  'Refined', 'Masterful', 'Superior', 'Elite', 'Expert', 'Precise',
+  'Strategic', 'Tactical', 'Innovative', 'Revolutionary', 'Adaptive', 'Dynamic'
+];
+
+const INVENTION_THEMES = [
+  'Foraging', 'Hunting', 'Gathering', 'Navigation', 'Communication',
+  'Defense', 'Offense', 'Survival', 'Cooperation', 'Efficiency',
+  'Awareness', 'Adaptation', 'Endurance', 'Speed', 'Strength',
+  'Intelligence', 'Memory', 'Reflexes', 'Instinct', 'Wisdom'
+];
+
+const INVENTION_TYPES: Array<'tool' | 'technique' | 'structure'> = [
+  'tool', 'technique', 'structure'
+];
+
+/**
+ * Generate a unique invention based on agent's capabilities and random inspiration
+ */
+function generateInvention(agent: Agent, tick: number, inventionNumber: number): Invention {
+  // Use agent's creativity to influence invention quality
+  const creativityFactor = agent.genes.curiosity * agent.genes.creativity;
+  
+  // Random invention type
+  const type = INVENTION_TYPES[Math.floor(Math.random() * INVENTION_TYPES.length)];
+  
+  // Generate unique name based on invention number and random elements
+  const prefix = INVENTION_PREFIXES[Math.floor(Math.random() * INVENTION_PREFIXES.length)];
+  const theme = INVENTION_THEMES[Math.floor(Math.random() * INVENTION_THEMES.length)];
+  const name = `${prefix} ${theme}`;
+  const id = `invention_${agent.id}_${inventionNumber}_${tick}`;
+  
+  // Determine effect type based on creativity and randomness
+  const effectRoll = Math.random();
+  let effect: InventionEffect;
+  let description: string;
+  
+  if (effectRoll < 0.4) {
+    // Energy efficiency - scales with creativity (ACTIVE EFFECT)
+    const multiplier = 0.95 - (creativityFactor * 0.25); // 0.7 to 0.95 range
+    effect = { type: 'energy_efficiency', multiplier: Math.max(0.5, multiplier) };
+    description = `Reduces energy cost by ${Math.round((1 - multiplier) * 100)}%`;
+  } else if (effectRoll < 0.7) {
+    // Reproduction boost - scales with creativity (ACTIVE EFFECT)
+    const bonus = Math.ceil(2 + creativityFactor * 8); // 2 to 10 bonus
+    effect = { type: 'reproduction_boost', bonus };
+    description = `+${bonus} bonus energy for reproduction`;
+  } else if (effectRoll < 0.85) {
+    // Food detection range - scales with exploration (PARTIAL: Function exists, not integrated in decision logic)
+    const range = Math.ceil(1 + agent.genes.exploration * 3); // 1 to 4 range
+    effect = { type: 'food_detection_range', range };
+    description = `Detect food ${range} cells away`;
+  } else if (effectRoll < 0.95) {
+    // Storage capacity - scales with patience (FUTURE: Awaiting game mechanic implementation)
+    const capacity = Math.ceil(5 + agent.genes.patience * 20); // 5 to 25 capacity
+    effect = { type: 'storage', capacity };
+    description = `Store ${capacity} extra energy`;
+  } else {
+    // Defense - scales with both genes (FUTURE: Awaiting damage system implementation)
+    const protection = Math.min(0.5, 0.1 + creativityFactor * 0.4); // 0.1 to 0.5
+    effect = { type: 'defense', protection };
+    description = `${Math.round(protection * 100)}% chance to avoid energy loss`;
+  }
+  
+  return {
+    id,
+    name,
+    type,
+    effect,
+    discoveredAt: tick,
+    discoveredBy: agent.id,
+    requirements: [], // No prerequisites in limitless system
+    description
+  };
+}
 
 /**
  * TYPE SAFETY IMPROVEMENT: Direction movement deltas mapping
@@ -223,6 +394,40 @@ function applyDirection(
   };
 }
 
+function createEmptyGrid(width?: number, height?: number): Cell[][] {
+  const w = width || GRID_WIDTH;
+  const h = height || GRID_HEIGHT;
+  return Array.from({ length: h }, () =>
+    Array.from({ length: w }, () => ({ food: false } as Cell))
+  );
+}
+
+/**
+ * Expands the grid by adding rows/columns when needed for reproduction
+ */
+function expandGrid(
+  grid: Cell[][], 
+  direction: 'right' | 'bottom' | 'both',
+  expandBy: number = 2
+): Cell[][] {
+  if (direction === 'right' || direction === 'both') {
+    // Add columns to the right
+    grid = grid.map(row => [
+      ...row,
+      ...Array.from({ length: expandBy }, () => ({ food: false } as Cell))
+    ]);
+  }
+  
+  if (direction === 'bottom' || direction === 'both') {
+    // Add rows to the bottom
+    const newWidth = grid[0]?.length || GRID_WIDTH;
+    const newRows = Array.from({ length: expandBy }, () =>
+      Array.from({ length: newWidth }, () => ({ food: false } as Cell))
+    );
+    grid = [...grid, ...newRows];
+  }
+  
+  return grid;
 function createEmptyGrid(): Cell[][] {
   return Array.from({ length: GRID_HEIGHT }, () =>
     Array.from({ length: GRID_WIDTH }, () => ({ food: false, terrain: "plain" as const }))
@@ -377,6 +582,12 @@ function createRandomGenes(): Genes {
     reproductionThreshold: CONFIG.genes.reproductionThreshold.min + Math.random() * (CONFIG.genes.reproductionThreshold.max - CONFIG.genes.reproductionThreshold.min),
     mutationRate: CONFIG.genes.mutationRate.min + Math.random() * (CONFIG.genes.mutationRate.max - CONFIG.genes.mutationRate.min),
     traitId: randomTraitId(),
+    // NEW: Learning & invention genes
+    curiosity: CONFIG.genes.curiosity.min + Math.random() * (CONFIG.genes.curiosity.max - CONFIG.genes.curiosity.min),
+    social: CONFIG.genes.social.min + Math.random() * (CONFIG.genes.social.max - CONFIG.genes.social.min),
+    creativity: CONFIG.genes.creativity.min + Math.random() * (CONFIG.genes.creativity.max - CONFIG.genes.creativity.min),
+    patience: CONFIG.genes.patience.min + Math.random() * (CONFIG.genes.patience.max - CONFIG.genes.patience.min),
+    traitId: randomTraitId(),
     riskTolerance: CONFIG.genes.riskTolerance.min + Math.random() * (CONFIG.genes.riskTolerance.max - CONFIG.genes.riskTolerance.min),
     socialDrive: CONFIG.genes.socialDrive.min + Math.random() * (CONFIG.genes.socialDrive.max - CONFIG.genes.socialDrive.min),
     intelligence: CONFIG.genes.intelligence.min + Math.random() * (CONFIG.genes.intelligence.max - CONFIG.genes.intelligence.min),
@@ -404,6 +615,10 @@ function createInitialAgents(grid: Cell[][], count: number = INITIAL_AGENTS): Ag
       sex: Math.random() < 0.5 ? "M" : "F",
       ageTicks: 0,
       genes: createRandomGenes(),
+      memory: { qTable: {} },
+      lastRule: "none",
+      inventions: [],  // NEW: Start with no inventions
+      inventionPoints: 0  // NEW: Start with no invention points
       memory: createInitialMemory(),
       lastRule: "none"
     });
@@ -472,6 +687,39 @@ function mutateGenes(parent: Genes): Genes {
     CONFIG.genes.mutation.mutationRateEvolveMax
   );
 
+  // NEW: Mutate learning & invention genes
+  const curiosity = mutateValue(
+    parent.curiosity,
+    mutationRate,
+    CONFIG.genes.mutation.curiosityMagnitude,
+    0.0,
+    1.0
+  );
+
+  const social = mutateValue(
+    parent.social,
+    mutationRate,
+    CONFIG.genes.mutation.socialMagnitude,
+    0.0,
+    1.0
+  );
+
+  const creativity = mutateValue(
+    parent.creativity,
+    mutationRate,
+    CONFIG.genes.mutation.creativityMagnitude,
+    0.0,
+    1.0
+  );
+
+  const patience = mutateValue(
+    parent.patience,
+    mutationRate,
+    CONFIG.genes.mutation.patienceMagnitude,
+    0.0,
+    1.0
+  );
+
   // sometimes spawn a totally new traitId => random trait generation
   const traitId =
     Math.random() < CONFIG.genes.mutation.newTraitChance ? randomTraitId() : parent.traitId;
@@ -514,6 +762,12 @@ function mutateGenes(parent: Genes): Genes {
     exploration,
     reproductionThreshold,
     mutationRate: newMutationRate,
+    traitId,
+    curiosity,
+    social,
+    creativity,
+    patience,
+  };
     traitId,
     riskTolerance,
     socialDrive,
@@ -864,6 +1118,109 @@ function decideMove(
 }
 
 /**
+ * Check if an agent discovers a new invention this tick.
+ * 
+ * LIMITLESS DISCOVERY SYSTEM:
+ * - Agents accumulate "invention points" through exploration and survival
+ * - Points are spent to generate new, unique inventions
+ * - Discovery is influenced by curiosity and creativity genes
+ * - No cap on number of inventions - agents can discover infinitely
+ * - Each invention is procedurally generated with effects scaled to agent's abilities
+ */
+function checkForDiscovery(
+  agent: Agent, 
+  tick: number
+): { invention: Invention | null; updatedAgent: Agent } {
+  // Agents gain invention points based on curiosity and exploration
+  // Points represent accumulated knowledge, experience, and inspiration
+  const pointGain = agent.genes.curiosity * agent.genes.exploration * 0.5;
+  let newPoints = agent.inventionPoints + pointGain;
+  
+  // Only agents with enough energy can invent (cognitive surplus)
+  if (agent.energy < 15) {
+    return { 
+      invention: null, 
+      updatedAgent: { ...agent, inventionPoints: newPoints }
+    };
+  }
+  
+  // Discovery chance increases with curiosity and creativity
+  const creativityBoost = agent.genes.creativity;
+  const discoveryChance = agent.genes.curiosity * 0.03 * (1 + creativityBoost);
+  
+  // Also consider accumulated invention points as inspiration
+  const inspirationBonus = Math.min(0.02, newPoints * 0.001);
+  const totalChance = discoveryChance + inspirationBonus;
+  
+  if (Math.random() > totalChance) {
+    return { 
+      invention: null, 
+      updatedAgent: { ...agent, inventionPoints: newPoints }
+    };
+  }
+  
+  // Discovery! Generate a unique invention
+  const inventionNumber = agent.inventions.length + 1;
+  const invention = generateInvention(agent, tick, inventionNumber);
+  
+  // Spend some invention points on the discovery (but not all)
+  newPoints = Math.max(0, newPoints - 5);
+  
+  return { 
+    invention, 
+    updatedAgent: { ...agent, inventionPoints: newPoints }
+  };
+}
+
+/**
+ * Calculate the actual energy cost for movement based on inventions.
+ */
+function getMovementCost(agent: Agent): number {
+  let cost = 1; // Base cost
+  
+  // Check for energy efficiency inventions
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'energy_efficiency') {
+      cost *= inv.effect.multiplier;
+    }
+  }
+  
+  return Math.max(0.5, cost); // Minimum cost of 0.5
+}
+
+/**
+ * Get the food detection range for an agent.
+ * FUTURE: This helper is ready but not yet integrated into decision-making logic.
+ * In Phase 3, this would be used to detect food beyond adjacent cells.
+ */
+function getFoodDetectionRange(agent: Agent): number {
+  let range = 1; // Base range (adjacent cells)
+  
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'food_detection_range') {
+      range = Math.max(range, inv.effect.range);
+    }
+  }
+  
+  return range;
+}
+
+/**
+ * Get reproduction bonus from inventions.
+ */
+function getReproductionBonus(agent: Agent): number {
+  let bonus = 0;
+  
+  for (const inv of agent.inventions) {
+    if (inv.effect.type === 'reproduction_boost') {
+      bonus += inv.effect.bonus;
+    }
+  }
+  
+  return bonus;
+}
+
+/**
  * Apply one simulation step, including reproduction + mutation + RL updates
  * 
  * CRITICAL BUG FIX #2: Added collision detection
@@ -871,6 +1228,30 @@ function decideMove(
  */
 function stepWorld(
   agents: Agent[],
+  grid: Cell[][],
+  tick: number,
+  scienceState: ScienceState | null = null
+): { 
+  agents: Agent[]; 
+  grid: Cell[][]; 
+  log: string[]; 
+  discoveries: DiscoveryEvent[]; 
+  gridExpanded: boolean;
+  scienceState: ScienceState | null;
+  eraAdvanced: boolean;
+} {
+  // Initialize science system if not already done (at tick 0 or when enabled)
+  let currentScienceState = scienceState;
+  if (!currentScienceState && tick === 0) {
+    currentScienceState = initializeScienceSystem(tick);
+  }
+  
+  // Update grid dimensions
+  const currentHeight = grid.length;
+  const currentWidth = grid[0]?.length || GRID_WIDTH;
+  GRID_WIDTH = currentWidth;
+  GRID_HEIGHT = currentHeight;
+  
   grid: Cell[][],
   foodRecycleSettings?: { enabled: boolean; maxFoodPerAgent: number }
 ): { agents: Agent[]; grid: Cell[][]; log: string[] } {
@@ -880,6 +1261,8 @@ function stepWorld(
 
   const logs: string[] = [];
   const updatedAgents: Agent[] = [];
+  const discoveries: DiscoveryEvent[] = [];
+  let gridExpanded = false;
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -943,7 +1326,9 @@ function stepWorld(
       destinationMap.set(destKey, agent.id);
     }
 
-    let newEnergy = agent.energy - CONFIG.simulation.baseEnergyCost;
+    // Apply energy cost with invention effects
+    const movementCost = getMovementCost(agent);
+    let newEnergy = agent.energy - movementCost;
     const cell = newGrid[finalY][finalX];
     let ateFood = false;
     let richBonus = 0;
@@ -1068,6 +1453,94 @@ function stepWorld(
       x: finalX,
       y: finalY,
       energy: newEnergy,
+      lastRule: decision.rule
+    };
+
+    // Check for invention discovery (with science level for breakthrough potential)
+    const scienceLevel = currentScienceState?.currentEra?.level || 0;
+    const discoveryResult = checkForDiscovery(parentAgent, tick, scienceLevel);
+    parentAgent = discoveryResult.updatedAgent; // Update with new invention points
+    
+    if (discoveryResult.invention) {
+      parentAgent = {
+        ...parentAgent,
+        inventions: [...parentAgent.inventions, discoveryResult.invention]
+      };
+      discoveries.push({
+        tick,
+        agentId: parentAgent.id,
+        invention: discoveryResult.invention
+      });
+      logs.push(
+        `Agent ${parentAgent.id} discovered ${discoveryResult.invention.name}! (${discoveryResult.invention.description})`
+      );
+    }
+
+    // REPRODUCTION
+    const reproThreshold = parentAgent.genes.reproductionThreshold;
+    let reproduced = false;
+
+    // Apply reproduction bonus from inventions
+    const reproBonus = getReproductionBonus(parentAgent);
+    const effectiveEnergy = parentAgent.energy + reproBonus;
+
+    if (effectiveEnergy > reproThreshold) {
+      let neighborSpots = [
+        { x: finalX, y: finalY - 1 },
+        { x: finalX, y: finalY + 1 },
+        { x: finalX - 1, y: finalY },
+        { x: finalX + 1, y: finalY }
+      ].filter(
+        p =>
+          p.x >= 0 &&
+          p.x < GRID_WIDTH &&
+          p.y >= 0 &&
+          p.y < GRID_HEIGHT &&
+          newGrid[p.y][p.x].agentId === undefined &&
+          !destinationMap.has(`${p.x},${p.y}`) // Also check collision map
+      );
+
+      // Grid expansion when no space available
+      if (neighborSpots.length === 0 && 
+          (GRID_WIDTH < CONFIG.grid.maxWidth || GRID_HEIGHT < CONFIG.grid.maxHeight)) {
+        
+        // Determine expansion direction
+        let expandDirection: 'right' | 'bottom' | 'both' = 'both';
+        if (finalX >= GRID_WIDTH - 2 && GRID_WIDTH < CONFIG.grid.maxWidth) {
+          expandDirection = 'right';
+        } else if (finalY >= GRID_HEIGHT - 2 && GRID_HEIGHT < CONFIG.grid.maxHeight) {
+          expandDirection = 'bottom';
+        }
+        
+        // Expand the grid
+        const expandedGrid = expandGrid(newGrid, expandDirection, CONFIG.grid.expandBy);
+        Object.assign(newGrid, expandedGrid);
+        newGrid.length = expandedGrid.length;
+        
+        const newWidth = expandedGrid[0]?.length || GRID_WIDTH;
+        const newHeight = expandedGrid.length;
+        GRID_WIDTH = newWidth;
+        GRID_HEIGHT = newHeight;
+        gridExpanded = true;
+        
+        logs.push(`Grid expanded to ${newWidth}×${newHeight} to accommodate population growth!`);
+        
+        // Recalculate neighbor spots
+        neighborSpots = [
+          { x: finalX, y: finalY - 1 },
+          { x: finalX, y: finalY + 1 },
+          { x: finalX - 1, y: finalY },
+          { x: finalX + 1, y: finalY }
+        ].filter(
+          p =>
+            p.x >= 0 &&
+            p.x < GRID_WIDTH &&
+            p.y >= 0 &&
+            p.y < GRID_HEIGHT &&
+            newGrid[p.y]?.[p.x]?.agentId === undefined &&
+            !destinationMap.has(`${p.x},${p.y}`)
+        );
+      }
       lastRule: decision.rule,
       ageTicks: newAgeTicks,
       lastDirection: decision.dir,
@@ -1109,6 +1582,31 @@ function stepWorld(
           const childEnergy = Math.floor(parentAgent.energy * CONFIG.reproduction.energyCostRatio);
           parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
 
+        const childGenes = mutateGenes(parentAgent.genes);
+        
+        // Inheritance: children can inherit parent's inventions based on social gene
+        const inheritedInventions = parentAgent.inventions.filter(
+          inv => Math.random() < parentAgent.genes.social * 0.8
+        );
+        
+        // Children inherit a portion of parent's invention points (learning from parent)
+        const inheritedPoints = parentAgent.inventionPoints * parentAgent.genes.social * 0.3;
+        
+        const child: Agent = {
+          id: nextId++,
+          x: spot.x,
+          y: spot.y,
+          energy: childEnergy,
+          genes: childGenes,
+          memory: { qTable: {} },
+          lastRule: 'Born (memória genética + "Mutation")',
+          inventions: inheritedInventions.map(inv => ({
+            ...inv,
+            // Mark as inherited, not discovered by this agent
+            discoveredBy: parentAgent.id,
+          })),
+          inventionPoints: inheritedPoints, // NEW: Inherit some creativity points
+        };
           const child: Agent = {
             id: nextId++,
             x: spot.x,
@@ -1136,6 +1634,16 @@ function stepWorld(
           destinationMap.set(`${spot.x},${spot.y}`, child.id);
           updatedAgents.push(child);
 
+        reward += CONFIG.simulation.reproductionReward;
+        reproduced = true;
+
+        const inheritMsg = inheritedInventions.length > 0 
+          ? ` inherited ${inheritedInventions.length} inventions`
+          : '';
+        logs.push(
+          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}${inheritMsg}`
+        );
+      }
           logs.push(
             `🍼 Agent ${parentAgent.id}(${parentAgent.sex}) gave birth to ${child.id}(${child.sex}) at (${spot.x},${spot.y}), traitId ${child.genes.traitId}`
           );
@@ -1387,6 +1895,38 @@ function stepWorld(
    * Now we properly use the returned grid to ensure food actually appears.
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
+    const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
+    
+    // Update science system if active
+    let finalScienceState = currentScienceState;
+    let eraAdvanced = false;
+    if (currentScienceState) {
+      const scienceUpdate = updateScienceSystem(currentScienceState, updatedAgents, tick);
+      finalScienceState = scienceUpdate.scienceState;
+      eraAdvanced = scienceUpdate.eraAdvanced;
+      
+      // Log science discoveries
+      if (scienceUpdate.newDiscoveries.length > 0) {
+        scienceUpdate.newDiscoveries.forEach(discovery => {
+          logs.push(`🔬 ${discovery.name} discovered! (${discovery.type})`);
+        });
+      }
+      
+      // Log era advancement
+      if (eraAdvanced && scienceUpdate.newEra) {
+        logs.push(`🎉 CIVILIZATION ADVANCED TO ${scienceUpdate.newEra.name.toUpperCase()}!`);
+      }
+    }
+    
+    return { 
+      agents: updatedAgents, 
+      grid: gridWithFood, 
+      log: logs, 
+      discoveries, 
+      gridExpanded,
+      scienceState: finalScienceState,
+      eraAdvanced
+    };
     finalGrid = placeRandomFood(finalGrid, CONFIG.simulation.foodSpawnCount);
   }
 
@@ -1395,6 +1935,36 @@ function stepWorld(
     finalGrid = spawnResources(finalGrid);
   }
 
+  // Update science system if active (no food spawn case)
+  let finalScienceState = currentScienceState;
+  let eraAdvanced = false;
+  if (currentScienceState) {
+    const scienceUpdate = updateScienceSystem(currentScienceState, updatedAgents, tick);
+    finalScienceState = scienceUpdate.scienceState;
+    eraAdvanced = scienceUpdate.eraAdvanced;
+    
+    // Log science discoveries
+    if (scienceUpdate.newDiscoveries.length > 0) {
+      scienceUpdate.newDiscoveries.forEach(discovery => {
+        logs.push(`🔬 ${discovery.name} discovered! (${discovery.type})`);
+      });
+    }
+    
+    // Log era advancement
+    if (eraAdvanced && scienceUpdate.newEra) {
+      logs.push(`🎉 CIVILIZATION ADVANCED TO ${scienceUpdate.newEra.name.toUpperCase()}!`);
+    }
+  }
+
+  return { 
+    agents: updatedAgents, 
+    grid: newGrid, 
+    log: logs, 
+    discoveries, 
+    gridExpanded,
+    scienceState: finalScienceState,
+    eraAdvanced
+  };
   return { agents: updatedAgents, grid: finalGrid, log: logs };
 }
 
@@ -1742,11 +2312,15 @@ const App: React.FC = () => {
   
   const [grid, setGrid] = useState<Cell[][]>(initialWorld.grid);
   const [agents, setAgents] = useState<Agent[]>(initialWorld.agents);
+  const [gridWidth, setGridWidth] = useState(CONFIG.grid.initialWidth);
+  const [gridHeight, setGridHeight] = useState(CONFIG.grid.initialHeight);
 
   const [log, setLog] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  const [discoveries, setDiscoveries] = useState<DiscoveryEvent[]>([]);
+  const [scienceState, setScienceState] = useState<ScienceState | null>(null);  // NEW: Science system state
   const [isRunning, setIsRunning] = useState(false);
   const [speedMs, setSpeedMs] = useState(400);
   const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
@@ -1783,15 +2357,15 @@ const App: React.FC = () => {
     for (const agent of agents) {
       if (
         agent.x >= 0 &&
-        agent.x < GRID_WIDTH &&
+        agent.x < gridWidth &&
         agent.y >= 0 &&
-        agent.y < GRID_HEIGHT
+        agent.y < gridHeight
       ) {
         copy[agent.y][agent.x].agentId = agent.id;
       }
     }
     return copy;
-  }, [grid, agents]);
+  }, [grid, agents, gridWidth, gridHeight]);
 
   const selectedAgent = useMemo(
     () => agents.find(a => a.id === selectedAgentId) || null,
@@ -1812,8 +2386,19 @@ const App: React.FC = () => {
   }, []);
 
   const handleStep = useCallback(() => {
-    const { agents: newAgents, grid: newGrid, log: newLog } = stepWorld(
+    const { 
+      agents: newAgents, 
+      grid: newGrid, 
+      log: newLog, 
+      discoveries: newDiscoveries, 
+      gridExpanded,
+      scienceState: newScienceState,
+      eraAdvanced
+    } = stepWorld(
       agents,
+      renderedGrid,
+      tickRef.current,
+      scienceState
       renderedGrid,
       { enabled: settings.foodRecycleEnabled, maxFoodPerAgent: settings.maxFoodPerAgent }
     );
@@ -1821,8 +2406,20 @@ const App: React.FC = () => {
     setTick(newTick);
     setAgents(newAgents);
     setGrid(newGrid);
+    if (gridExpanded) {
+      setGridWidth(newGrid[0]?.length || gridWidth);
+      setGridHeight(newGrid.length);
+    }
+    if (newScienceState) {
+      setScienceState(newScienceState);
+    }
+    if (eraAdvanced) {
+      // Could add special effects or notifications for era advancement
+    }
     setLog(prev => [...newLog, ...prev].slice(0, 80));
+    setDiscoveries(prev => [...prev, ...newDiscoveries]);
     pushHistory(newAgents, newTick);
+  }, [agents, renderedGrid, pushHistory, gridWidth, scienceState]);
   }, [agents, renderedGrid, pushHistory, settings.foodRecycleEnabled, settings.maxFoodPerAgent]);
 
   const handleReset = () => {
@@ -1833,6 +2430,8 @@ const App: React.FC = () => {
     setSelectedAgentId(null);
     setTick(0);
     setHistory([]);
+    setDiscoveries([]);
+    setScienceState(null);  // Reset science state
     setIsRunning(false);
     setWatchedTraitId(null);
   };
@@ -2068,26 +2667,41 @@ const App: React.FC = () => {
         throw new Error("Invalid world file: missing required fields (grid, agents, tick, or history)");
       }
       
-      // Validate grid dimensions
-      if (parsed.grid.length !== GRID_HEIGHT || parsed.grid[0]?.length !== GRID_WIDTH) {
-        throw new Error(
-          `Invalid grid dimensions: expected ${GRID_WIDTH}x${GRID_HEIGHT}, got ${parsed.grid[0]?.length}x${parsed.grid.length}`
-        );
-      }
+      // discoveries is optional for backwards compatibility
+      const parsedDiscoveries = parsed.discoveries || [];
+      
+      // scienceState is optional for backwards compatibility
+      const parsedScienceState = parsed.scienceState || null;
+      
+      // Grid dimensions are dynamic - load from state or infer from grid
+      const loadedWidth = parsed.gridWidth || parsed.grid[0]?.length || CONFIG.grid.initialWidth;
+      const loadedHeight = parsed.gridHeight || parsed.grid.length;
+      
+      // Update global dimensions
+      GRID_WIDTH = loadedWidth;
+      GRID_HEIGHT = loadedHeight;
       
       // Validate agent positions
       for (const agent of parsed.agents) {
-        if (agent.x < 0 || agent.x >= GRID_WIDTH || agent.y < 0 || agent.y >= GRID_HEIGHT) {
+        if (agent.x < 0 || agent.x >= loadedWidth || agent.y < 0 || agent.y >= loadedHeight) {
           throw new Error(`Invalid agent position: Agent ${agent.id} at (${agent.x},${agent.y})`);
+        }
+        // Add inventionPoints if missing (backward compatibility)
+        if (agent.inventionPoints === undefined) {
+          agent.inventionPoints = 0;
         }
       }
       
       // All validations passed
       setGrid(parsed.grid);
       setAgents(parsed.agents);
+      setGridWidth(loadedWidth);
+      setGridHeight(loadedHeight);
       setTick(parsed.tick);
       setHistory(parsed.history);
-      setLog([`World loaded successfully from ${file.name}`]);
+      setDiscoveries(parsedDiscoveries);
+      setScienceState(parsedScienceState);
+      setLog([`World loaded successfully from ${file.name} (${loadedWidth}×${loadedHeight})${parsedScienceState ? ' with science data' : ''}`]);
       setSelectedAgentId(null);
       setIsRunning(false);
       setWatchedTraitId(null);
@@ -2361,6 +2975,74 @@ const App: React.FC = () => {
           )}
           </div>
 
+        <div style={{ marginTop: "12px" }}>
+          <button onClick={handleStep} style={{ marginRight: "8px" }}>
+            Step
+          </button>
+          <button
+            onClick={() => setIsRunning(r => !r)}
+            style={{ marginRight: "8px" }}
+          >
+            {isRunning ? "Pause" : "Play"}
+          </button>
+          <button onClick={handleReset}>Reset World</button>
+          <button
+            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+            style={{ marginLeft: 8 }}
+          >
+            Save World (JSON)
+          </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            style={{ marginLeft: 8 }}
+          >
+            Load World
+          </button>
+          
+          {/* DATA EXPORT BUTTONS */}
+          <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              onClick={() => exportInventionHistory({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export all invention discoveries and agent invention data"
+            >
+              📜 Export Inventions
+            </button>
+            <button
+              onClick={() => exportEvolutionData({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export population dynamics and genetic evolution data"
+            >
+              🧬 Export Evolution
+            </button>
+            <button
+              onClick={() => exportScienceLogs({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export scientific discoveries and era progression"
+              disabled={!scienceState}
+            >
+              🔬 Export Science
+            </button>
+            <button
+              onClick={() => exportCompleteData({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
+              style={{ fontSize: 11, padding: '4px 8px' }}
+              title="Export complete simulation data (all systems)"
+            >
+              💾 Export All Data
+            </button>
+          </div>
+          
+          <div style={{ marginTop: 8, fontSize: 12 }}>
+            Speed:{" "}
+            <input
+              type="range"
+              min={100}
+              max={1200}
+              step={100}
+              value={speedMs}
+              onChange={e => setSpeedMs(Number(e.target.value))}
+            />{" "}
+            {speedMs} ms/tick
           <div style={{ marginTop: "16px", display: "flex", flexWrap: "wrap", gap: "8px" }}>
             <button 
               onClick={handleStep} 
@@ -2670,6 +3352,15 @@ const App: React.FC = () => {
                 {(selectedAgent.ageTicks * CONFIG.time.yearsPerTick) > CONFIG.time.maxReproAgeYears && 
                   <span style={{ marginLeft: 8, color: "#9e9e9e" }}>👴 Elder</span>}
               </p>
+              <p>
+                <strong>Invention Points:</strong> {selectedAgent.inventionPoints.toFixed(1)}
+                <br />
+                <span style={{ fontSize: "0.85em", opacity: 0.8 }}>
+                  (Accumulated through exploration & curiosity, used to inspire new inventions)
+                </span>
+              </p>
+              <p>
+                <strong>Last Rule ("Regra" / "Regle"):</strong>{" "}
               {/* Reproduction status */}
               {selectedAgent.pregnantWith && (
                 <p style={{ background: "rgba(255,215,0,0.1)", padding: "4px 8px", borderRadius: 4 }}>
@@ -2694,6 +3385,12 @@ const App: React.FC = () => {
                 reproThresh={selectedAgent.genes.reproductionThreshold.toFixed(1)},{" "}
                 mutationRate={selectedAgent.genes.mutationRate.toFixed(2)}
                 <br />
+                {/* NEW GENES */}
+                curiosity={selectedAgent.genes.curiosity.toFixed(2)},{" "}
+                social={selectedAgent.genes.social.toFixed(2)},{" "}
+                creativity={selectedAgent.genes.creativity.toFixed(2)},{" "}
+                patience={selectedAgent.genes.patience.toFixed(2)}
+                <br />
                 <strong>Intelligence:</strong> {selectedAgent.genes.intelligence.toFixed(2)},{" "}
                 <strong>Creativity:</strong> {selectedAgent.genes.creativity.toFixed(2)}
                 <br />
@@ -2702,6 +3399,27 @@ const App: React.FC = () => {
                 <br />
                 traitId={selectedAgent.genes.traitId}
               </p>
+              <p>
+                <strong>Inventions ({selectedAgent.inventions.length}):</strong>
+                {selectedAgent.inventions.length === 0 ? (
+                  <span> None yet</span>
+                ) : (
+                  <ul style={{ paddingLeft: "18px", fontSize: "0.85em", marginTop: 4 }}>
+                    {selectedAgent.inventions.map(inv => (
+                      <li key={inv.id}>
+                        {inv.name} - {inv.description || inv.effect.type}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </p>
+            </>
+          ) : (
+            <p>Click an agente in the grid to inspect its "memória genética".</p>
+          )}
+        </div>
+
+        {/* Rules + RL + evolution description */}
               {/* Tool and Inventory */}
               {(selectedAgent.tool || selectedAgent.storedFood) && (
                 <p style={{ background: "rgba(100,200,255,0.1)", padding: "4px 8px", borderRadius: 4 }}>
@@ -2807,6 +3525,18 @@ const App: React.FC = () => {
             watchedTraitId={watchedTraitId}
             onSelectTrait={tid => setWatchedTraitId(tid)}
           />
+        </div>
+
+        {/* Discovery Timeline */}
+        <DiscoveryTimeline discoveries={discoveries} />
+
+        {/* Invention Statistics */}
+        <InventionStats agents={agents} discoveries={discoveries} />
+
+        {/* Science Progress Panel - NEW */}
+        <ScienceProgressPanel scienceState={scienceState} tick={tick} />
+
+        {/* Log */}
         </div>        {/* Log */}
         <div
           style={{
