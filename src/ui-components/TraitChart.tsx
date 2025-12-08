@@ -16,7 +16,7 @@ interface TraitChartProps {
 export const TraitChart: React.FC<TraitChartProps> = ({ last, watchedTraitId, onSelectTrait }) => {
   if (!last) return <p>No trait data yet.</p>;
   const entries = Object.entries(last.byTrait);
-  if (entries.length === 0) return <p>No agentes alive.</p>;
+  if (entries.length === 0) return <p>No agents alive.</p>;
 
   const sorted = entries.sort((a, b) => b[1] - a[1]).slice(0, 5);
   const maxCount = Math.max(...sorted.map(([, c]) => c), 1);
