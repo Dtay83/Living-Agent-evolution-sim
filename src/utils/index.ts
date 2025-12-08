@@ -108,12 +108,15 @@ export function expandGrid(
  */
 export function placeRandomFood(grid: Cell[][], count: number): Cell[][] {
   const copy = grid.map(row => row.map(cell => ({ ...cell })));
+  const height = copy.length;
+  const width = copy[0]?.length || 0;
+  
   let placed = 0;
   let safety = 0;
   while (placed < count && safety < 2000) {
     safety++;
-    const y = randomInt(GRID_HEIGHT);
-    const x = randomInt(GRID_WIDTH);
+    const y = randomInt(height);
+    const x = randomInt(width);
     if (!copy[y][x].food && copy[y][x].agentId === undefined) {
       copy[y][x].food = true;
       placed++;

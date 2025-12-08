@@ -6,7 +6,7 @@
 import type { Agent, Cell, DiscoveryEvent } from '../types';
 import { CONFIG, GRID_WIDTH, GRID_HEIGHT, ALPHA, GAMMA, setGridDimensions } from './config';
 import { applyDirection, placeRandomFood, randomInt, expandGrid } from '../utils';
-import { mutateGenes } from './genetics';
+import { mutateGenes, createInitialAgents } from './genetics';
 import { getStateKey, decideMove, getQ, setQ, bestActionAndValue } from './rl-system';
 import { 
   checkForDiscovery, 
@@ -179,9 +179,8 @@ export function stepWorld(
         // Expand the grid
         const expandedGrid = expandGrid(newGrid, expandDirection, CONFIG.grid.expandBy);
         
-        // Update references
-        Object.assign(newGrid, expandedGrid);
-        newGrid.length = expandedGrid.length;
+        // Replace grid contents properly
+        newGrid.splice(0, newGrid.length, ...expandedGrid);
         
         const newWidth = expandedGrid[0]?.length || currentWidth;
         const newHeight = expandedGrid.length;
@@ -320,8 +319,6 @@ export function initializeWorld(): { grid: Cell[][]; agents: Agent[]; gridWidth:
     CONFIG.simulation.initialFood
   );
   
-  // Import here to avoid circular dependency
-  const { createInitialAgents } = require('./genetics');
   const agents = createInitialAgents(grid);
   
   return { grid, agents, gridWidth: width, gridHeight: height };
