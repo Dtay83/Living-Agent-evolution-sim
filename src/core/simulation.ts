@@ -4,8 +4,8 @@
  */
 
 import type { Agent, Cell, DiscoveryEvent } from '../types';
-import { CONFIG, GRID_WIDTH, GRID_HEIGHT, ALPHA, GAMMA } from './config';
-import { applyDirection, placeRandomFood, randomInt } from '../utils';
+import { CONFIG, GRID_WIDTH, GRID_HEIGHT, ALPHA, GAMMA, setGridDimensions } from './config';
+import { applyDirection, placeRandomFood, randomInt, expandGrid } from '../utils';
 import { mutateGenes } from './genetics';
 import { getStateKey, decideMove, getQ, setQ, bestActionAndValue } from './rl-system';
 import { 
@@ -27,8 +27,16 @@ export function stepWorld(
   agents: Agent[],
   grid: Cell[][],
   tick: number
-): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[] } {
-  const newGrid: Cell[][] = grid.map(row =>
+): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[]; gridExpanded: boolean } {
+  let currentGrid = grid;
+  let gridExpanded = false;
+  const currentHeight = currentGrid.length;
+  const currentWidth = currentGrid[0]?.length || 0;
+  
+  // Update global dimensions in case grid has changed
+  setGridDimensions(currentWidth, currentHeight);
+  
+  const newGrid: Cell[][] = currentGrid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
   );
 
@@ -138,7 +146,7 @@ export function stepWorld(
     const effectiveEnergy = parentAgent.energy + reproBonus;
 
     if (effectiveEnergy > reproThreshold) {
-      const neighborSpots = [
+      let neighborSpots = [
         { x: finalX, y: finalY - 1 },
         { x: finalX, y: finalY + 1 },
         { x: finalX - 1, y: finalY },
@@ -146,12 +154,61 @@ export function stepWorld(
       ].filter(
         p =>
           p.x >= 0 &&
-          p.x < GRID_WIDTH &&
+          p.x < currentWidth &&
           p.y >= 0 &&
-          p.y < GRID_HEIGHT &&
+          p.y < currentHeight &&
           newGrid[p.y][p.x].agentId === undefined &&
           !destinationMap.has(`${p.x},${p.y}`) // Also check collision map
       );
+
+      // If no space available, try to expand the grid
+      if (neighborSpots.length === 0 && 
+          (currentWidth < CONFIG.grid.maxWidth || currentHeight < CONFIG.grid.maxHeight)) {
+        
+        // Determine expansion direction based on parent's position
+        let expandDirection: 'right' | 'bottom' | 'both' = 'both';
+        
+        if (finalX >= currentWidth - 2 && currentWidth < CONFIG.grid.maxWidth) {
+          expandDirection = 'right';
+        } else if (finalY >= currentHeight - 2 && currentHeight < CONFIG.grid.maxHeight) {
+          expandDirection = 'bottom';
+        } else if (currentWidth < CONFIG.grid.maxWidth && currentHeight < CONFIG.grid.maxHeight) {
+          expandDirection = 'both';
+        }
+        
+        // Expand the grid
+        const expandedGrid = expandGrid(newGrid, expandDirection, CONFIG.grid.expandBy);
+        
+        // Update references
+        Object.assign(newGrid, expandedGrid);
+        newGrid.length = expandedGrid.length;
+        
+        const newWidth = expandedGrid[0]?.length || currentWidth;
+        const newHeight = expandedGrid.length;
+        
+        setGridDimensions(newWidth, newHeight);
+        gridExpanded = true;
+        
+        logs.push(
+          `Grid expanded to ${newWidth}×${newHeight} to accommodate population growth!`
+        );
+        
+        // Recalculate neighbor spots with new grid size
+        neighborSpots = [
+          { x: finalX, y: finalY - 1 },
+          { x: finalX, y: finalY + 1 },
+          { x: finalX - 1, y: finalY },
+          { x: finalX + 1, y: finalY }
+        ].filter(
+          p =>
+            p.x >= 0 &&
+            p.x < newWidth &&
+            p.y >= 0 &&
+            p.y < newHeight &&
+            newGrid[p.y]?.[p.x]?.agentId === undefined &&
+            !destinationMap.has(`${p.x},${p.y}`)
+        );
+      }
 
       if (neighborSpots.length > 0) {
         const spot = neighborSpots[randomInt(neighborSpots.length)];
@@ -240,20 +297,25 @@ export function stepWorld(
   // Food spawning with proper grid assignment
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries };
+    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, gridExpanded };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries };
+  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, gridExpanded };
 }
 
 /**
  * Initialize a new world state
- * @returns Initial grid and agents
+ * @returns Initial grid, agents, and dimensions
  */
-export function initializeWorld(): { grid: Cell[][]; agents: Agent[] } {
+export function initializeWorld(): { grid: Cell[][]; agents: Agent[]; gridWidth: number; gridHeight: number } {
+  const width = CONFIG.grid.initialWidth;
+  const height = CONFIG.grid.initialHeight;
+  
+  setGridDimensions(width, height);
+  
   const grid = placeRandomFood(
-    Array.from({ length: GRID_HEIGHT }, () =>
-      Array.from({ length: GRID_WIDTH }, () => ({ food: false }))
+    Array.from({ length: height }, () =>
+      Array.from({ length: width }, () => ({ food: false }))
     ),
     CONFIG.simulation.initialFood
   );
@@ -262,5 +324,5 @@ export function initializeWorld(): { grid: Cell[][]; agents: Agent[] } {
   const { createInitialAgents } = require('./genetics');
   const agents = createInitialAgents(grid);
   
-  return { grid, agents };
+  return { grid, agents, gridWidth: width, gridHeight: height };
 }

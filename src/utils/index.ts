@@ -53,11 +53,51 @@ export function applyDirection(
 
 /**
  * Creates an empty grid filled with empty cells
+ * @param width - Grid width
+ * @param height - Grid height
  */
-export function createEmptyGrid(): Cell[][] {
-  return Array.from({ length: GRID_HEIGHT }, () =>
-    Array.from({ length: GRID_WIDTH }, () => ({ food: false } as Cell))
+export function createEmptyGrid(width?: number, height?: number): Cell[][] {
+  const w = width || GRID_WIDTH;
+  const h = height || GRID_HEIGHT;
+  return Array.from({ length: h }, () =>
+    Array.from({ length: w }, () => ({ food: false } as Cell))
   );
+}
+
+/**
+ * Expands the grid by adding rows/columns when needed for reproduction
+ * @param grid - Current grid
+ * @param direction - Direction to expand ('right', 'bottom', or 'both')
+ * @param expandBy - Number of cells to add
+ * @returns Expanded grid
+ */
+export function expandGrid(
+  grid: Cell[][], 
+  direction: 'right' | 'bottom' | 'both',
+  expandBy: number = 2
+): Cell[][] {
+  const currentHeight = grid.length;
+  const currentWidth = grid[0]?.length || 0;
+  
+  if (direction === 'right' || direction === 'both') {
+    // Add columns to the right
+    const newGrid = grid.map(row => [
+      ...row,
+      ...Array.from({ length: expandBy }, () => ({ food: false } as Cell))
+    ]);
+    grid = newGrid;
+  }
+  
+  if (direction === 'bottom' || direction === 'both') {
+    // Add rows to the bottom
+    const newWidth = grid[0]?.length || currentWidth;
+    const newRows = Array.from({ length: expandBy }, () =>
+      Array.from({ length: newWidth }, () => ({ food: false } as Cell))
+    );
+    grid = [...grid, ...newRows];
+  }
+  
+  return grid;
 }
 
 /**

@@ -5,8 +5,11 @@
 
 export const CONFIG = {
   grid: {
-    width: 16,
-    height: 10,
+    initialWidth: 16,
+    initialHeight: 10,
+    maxWidth: 50,         // Maximum grid width before performance issues
+    maxHeight: 30,        // Maximum grid height
+    expandBy: 2,          // Number of cells to add when expanding
   },
   simulation: {
     initialAgents: 6,
@@ -64,9 +67,19 @@ export const CONFIG = {
   },
 } as const;
 
-// Backwards compatibility aliases
-export const GRID_WIDTH = CONFIG.grid.width;
-export const GRID_HEIGHT = CONFIG.grid.height;
+// Backwards compatibility aliases (now dynamic - will be set by WorldState)
+export let GRID_WIDTH = CONFIG.grid.initialWidth;
+export let GRID_HEIGHT = CONFIG.grid.initialHeight;
+
+/**
+ * Update grid dimensions (used when grid expands)
+ * @param width - New grid width
+ * @param height - New grid height
+ */
+export function setGridDimensions(width: number, height: number) {
+  GRID_WIDTH = width;
+  GRID_HEIGHT = height;
+}
 export const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
 export const INITIAL_FOOD = CONFIG.simulation.initialFood;
 export const ALPHA = CONFIG.rl.alpha;

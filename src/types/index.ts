@@ -103,6 +103,8 @@ export interface WorldState {
   tick: number;
   history: HistoryPoint[];
   discoveries: DiscoveryEvent[];
+  gridWidth: number;   // Current grid width (can expand)
+  gridHeight: number;  // Current grid height (can expand)
 }
 
 /**
