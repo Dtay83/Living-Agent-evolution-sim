@@ -1,6 +1,12 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { PopulationChart, TraitChart, DiscoveryTimeline, InventionStats } from './ui-components';
+import { PopulationChart, TraitChart, DiscoveryTimeline, InventionStats, ScienceProgressPanel } from './ui-components';
+import { 
+  initializeScienceSystem, 
+  updateScienceSystem, 
+  getScienceBonuses,
+  type ScienceState 
+} from './science-system';
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -90,6 +96,7 @@ interface WorldState {
   discoveries: DiscoveryEvent[];  // NEW: Track all discoveries
   gridWidth: number;   // Track current grid width (can expand)
   gridHeight: number;  // Track current grid height (can expand)
+  scienceState?: ScienceState;  // NEW: Scientific progress tracking
 }
 
 /**
@@ -712,8 +719,23 @@ function getReproductionBonus(agent: Agent): number {
 function stepWorld(
   agents: Agent[],
   grid: Cell[][],
-  tick: number
-): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[]; gridExpanded: boolean } {
+  tick: number,
+  scienceState: ScienceState | null = null
+): { 
+  agents: Agent[]; 
+  grid: Cell[][]; 
+  log: string[]; 
+  discoveries: DiscoveryEvent[]; 
+  gridExpanded: boolean;
+  scienceState: ScienceState | null;
+  eraAdvanced: boolean;
+} {
+  // Initialize science system if not already done (at tick 0 or when enabled)
+  let currentScienceState = scienceState;
+  if (!currentScienceState && tick === 0) {
+    currentScienceState = initializeScienceSystem(tick);
+  }
+  
   // Update grid dimensions
   const currentHeight = grid.length;
   const currentWidth = grid[0]?.length || GRID_WIDTH;
@@ -803,8 +825,9 @@ function stepWorld(
       lastRule: decision.rule
     };
 
-    // Check for invention discovery
-    const discoveryResult = checkForDiscovery(parentAgent, tick);
+    // Check for invention discovery (with science level for breakthrough potential)
+    const scienceLevel = currentScienceState?.currentEra?.level || 0;
+    const discoveryResult = checkForDiscovery(parentAgent, tick, scienceLevel);
     parentAgent = discoveryResult.updatedAgent; // Update with new invention points
     
     if (discoveryResult.invention) {
@@ -979,10 +1002,69 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, gridExpanded };
+    
+    // Update science system if active
+    let finalScienceState = currentScienceState;
+    let eraAdvanced = false;
+    if (currentScienceState) {
+      const scienceUpdate = updateScienceSystem(currentScienceState, updatedAgents, tick);
+      finalScienceState = scienceUpdate.scienceState;
+      eraAdvanced = scienceUpdate.eraAdvanced;
+      
+      // Log science discoveries
+      if (scienceUpdate.newDiscoveries.length > 0) {
+        scienceUpdate.newDiscoveries.forEach(discovery => {
+          logs.push(`🔬 ${discovery.name} discovered! (${discovery.type})`);
+        });
+      }
+      
+      // Log era advancement
+      if (eraAdvanced && scienceUpdate.newEra) {
+        logs.push(`🎉 CIVILIZATION ADVANCED TO ${scienceUpdate.newEra.name.toUpperCase()}!`);
+      }
+    }
+    
+    return { 
+      agents: updatedAgents, 
+      grid: gridWithFood, 
+      log: logs, 
+      discoveries, 
+      gridExpanded,
+      scienceState: finalScienceState,
+      eraAdvanced
+    };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, gridExpanded };
+  // Update science system if active (no food spawn case)
+  let finalScienceState = currentScienceState;
+  let eraAdvanced = false;
+  if (currentScienceState) {
+    const scienceUpdate = updateScienceSystem(currentScienceState, updatedAgents, tick);
+    finalScienceState = scienceUpdate.scienceState;
+    eraAdvanced = scienceUpdate.eraAdvanced;
+    
+    // Log science discoveries
+    if (scienceUpdate.newDiscoveries.length > 0) {
+      scienceUpdate.newDiscoveries.forEach(discovery => {
+        logs.push(`🔬 ${discovery.name} discovered! (${discovery.type})`);
+      });
+    }
+    
+    // Log era advancement
+    if (eraAdvanced && scienceUpdate.newEra) {
+      logs.push(`🎉 CIVILIZATION ADVANCED TO ${scienceUpdate.newEra.name.toUpperCase()}!`);
+    }
+  }
+
+  return { 
+    agents: updatedAgents, 
+    grid: newGrid, 
+    log: logs, 
+    discoveries, 
+    gridExpanded,
+    scienceState: finalScienceState,
+    eraAdvanced
+  };
 }
 
 /**
@@ -1046,6 +1128,7 @@ const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
   const [discoveries, setDiscoveries] = useState<DiscoveryEvent[]>([]);
+  const [scienceState, setScienceState] = useState<ScienceState | null>(null);  // NEW: Science system state
   const [isRunning, setIsRunning] = useState(false);
   const [speedMs, setSpeedMs] = useState(400);
   const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
@@ -1100,10 +1183,19 @@ const App: React.FC = () => {
   }, []);
 
   const handleStep = useCallback(() => {
-    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries, gridExpanded } = stepWorld(
+    const { 
+      agents: newAgents, 
+      grid: newGrid, 
+      log: newLog, 
+      discoveries: newDiscoveries, 
+      gridExpanded,
+      scienceState: newScienceState,
+      eraAdvanced
+    } = stepWorld(
       agents,
       renderedGrid,
-      tickRef.current
+      tickRef.current,
+      scienceState
     );
     const newTick = tickRef.current + 1;
     setTick(newTick);
@@ -1113,10 +1205,16 @@ const App: React.FC = () => {
       setGridWidth(newGrid[0]?.length || gridWidth);
       setGridHeight(newGrid.length);
     }
+    if (newScienceState) {
+      setScienceState(newScienceState);
+    }
+    if (eraAdvanced) {
+      // Could add special effects or notifications for era advancement
+    }
     setLog(prev => [...newLog, ...prev].slice(0, 80));
     setDiscoveries(prev => [...prev, ...newDiscoveries]);
     pushHistory(newAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, gridWidth]);
+  }, [agents, renderedGrid, pushHistory, gridWidth, scienceState]);
 
   const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
@@ -1127,6 +1225,7 @@ const App: React.FC = () => {
     setTick(0);
     setHistory([]);
     setDiscoveries([]);
+    setScienceState(null);  // Reset science state
     setIsRunning(false);
     setWatchedTraitId(null);
   };
@@ -1234,6 +1333,9 @@ const App: React.FC = () => {
       // discoveries is optional for backwards compatibility
       const parsedDiscoveries = parsed.discoveries || [];
       
+      // scienceState is optional for backwards compatibility
+      const parsedScienceState = parsed.scienceState || null;
+      
       // Grid dimensions are dynamic - load from state or infer from grid
       const loadedWidth = parsed.gridWidth || parsed.grid[0]?.length || CONFIG.grid.initialWidth;
       const loadedHeight = parsed.gridHeight || parsed.grid.length;
@@ -1261,7 +1363,8 @@ const App: React.FC = () => {
       setTick(parsed.tick);
       setHistory(parsed.history);
       setDiscoveries(parsedDiscoveries);
-      setLog([`World loaded successfully from ${file.name} (${loadedWidth}×${loadedHeight})`]);
+      setScienceState(parsedScienceState);
+      setLog([`World loaded successfully from ${file.name} (${loadedWidth}×${loadedHeight})${parsedScienceState ? ' with science data' : ''}`]);
       setSelectedAgentId(null);
       setIsRunning(false);
       setWatchedTraitId(null);
@@ -1403,7 +1506,7 @@ const App: React.FC = () => {
           </button>
           <button onClick={handleReset}>Reset World</button>
           <button
-            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries, gridWidth, gridHeight })}
+            onClick={() => downloadWorld({ grid, agents, tick, history, discoveries, gridWidth, gridHeight, scienceState })}
             style={{ marginLeft: 8 }}
           >
             Save World (JSON)
@@ -1604,6 +1707,9 @@ const App: React.FC = () => {
 
         {/* Invention Statistics */}
         <InventionStats agents={agents} discoveries={discoveries} />
+
+        {/* Science Progress Panel - NEW */}
+        <ScienceProgressPanel scienceState={scienceState} tick={tick} />
 
         {/* Log */}
         <div
