@@ -35,13 +35,13 @@ export const ScienceProgressPanel: React.FC<ScienceProgressPanelProps> = ({ scie
   const nextEra = currentEra.level < 8 
     ? currentEra.requirements
     : {
-        totalDiscoveries: currentEra.requirements.totalDiscoveries * 2,
-        physicsRequired: currentEra.requirements.physicsRequired * 1.5,
-        mathRequired: currentEra.requirements.mathRequired * 1.5,
+        minDiscoveries: currentEra.requirements.minDiscoveries * 2,
+        minPhysicsConcepts: Math.ceil(currentEra.requirements.minPhysicsConcepts * 1.5),
+        minMathConcepts: Math.ceil(currentEra.requirements.minMathConcepts * 1.5),
       };
   
   const progressPercent = Math.min(100, 
-    (progressionMetrics.totalDiscoveries / nextEra.totalDiscoveries) * 100
+    (progressionMetrics.totalDiscoveries / nextEra.minDiscoveries) * 100
   );
   
   // Get recent discoveries (last 5)
@@ -69,7 +69,7 @@ export const ScienceProgressPanel: React.FC<ScienceProgressPanelProps> = ({ scie
           marginBottom: 4
         }}>
           <span>Progress to Next Era</span>
-          <span>{progressionMetrics.totalDiscoveries} / {nextEra.totalDiscoveries} discoveries</span>
+          <span>{progressionMetrics.totalDiscoveries} / {nextEra.minDiscoveries} discoveries</span>
         </div>
         <div style={{
           width: '100%',
