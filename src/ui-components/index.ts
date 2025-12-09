@@ -9,3 +9,5 @@ export { DiscoveryTimeline } from './DiscoveryTimeline';
 export { InventionStats } from './InventionStats';
 export { ScienceProgressPanel } from './ScienceProgressPanel';
 export { ConsciousnessPanel, ConsciousnessSummaryPanel } from './ConsciousnessPanel';
+export { ChatPanel } from './ChatPanel';
+export { AnalysisPanel } from './AnalysisPanel';

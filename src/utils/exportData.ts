@@ -5,10 +5,12 @@
  * - Invention history (all discoveries with timestamps)
  * - Evolution data (population dynamics, trait distribution, genetic trends)
  * - Scientific era logs (physics/mathematics discoveries, era progression)
+ * - Agent conversations (self-aware agent communications and questions)
  */
 
 import type { WorldState, Agent, DiscoveryEvent, HistoryPoint } from '../types';
 import type { ScienceState } from '../science-system';
+import type { CommunicationLog, AgentMessage, MessageType } from '../communication-system';
 
 /**
  * Generic function to trigger a JSON file download in the browser
@@ -272,6 +274,102 @@ export function exportCompleteData(world: WorldState): void {
       currentEra: world.scienceState?.currentEra.name || 'Unknown',
     },
   };
+    downloadJSON(completeData, `complete-export_tick-${world.tick}_${timestamp}.json`);
+}
+
+/**
+ * Export agent conversation history
+ * Captures all communications from self-aware agents including questions and statements
+ */
+export function exportConversations(
+  communicationLog: CommunicationLog,
+  tick: number,
+  agents?: Agent[]
+): void {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   
-  downloadJSON(completeData, `complete-export_tick-${world.tick}_${timestamp}.json`);
+  // Group messages by agent
+  const messagesByAgent: Record<number, AgentMessage[]> = {};
+  for (const msg of communicationLog.messages) {
+    if (!messagesByAgent[msg.agentId]) {
+      messagesByAgent[msg.agentId] = [];
+    }
+    messagesByAgent[msg.agentId].push(msg);
+  }
+
+  // Count messages by type
+  const messagesByType: Record<string, number> = {};
+  for (const msg of communicationLog.messages) {
+    messagesByType[msg.type] = (messagesByType[msg.type] || 0) + 1;
+  }
+
+  // Extract questions vs statements
+  const questions = communicationLog.messages.filter(m => m.isQuestion);
+  const statements = communicationLog.messages.filter(m => !m.isQuestion);
+
+  const conversationData = {
+    exportedAt: new Date().toISOString(),
+    simulationTick: tick,
+    summary: {
+      totalMessages: communicationLog.totalMessages,
+      uniqueAgents: Object.keys(messagesByAgent).length,
+      firstCommunicationTick: communicationLog.firstCommunicationTick,
+      questionsCount: questions.length,
+      statementsCount: statements.length,
+      messagesByType,
+    },
+    timeline: communicationLog.messages.map(msg => ({
+      tick: msg.tick,
+      agentId: msg.agentId,
+      type: msg.type,
+      content: msg.content,
+      isQuestion: msg.isQuestion,
+      consciousnessLevel: msg.consciousnessLevel,
+      context: msg.context,
+    })),
+    byAgent: Object.entries(messagesByAgent).map(([agentId, messages]) => {
+      const agent = agents?.find(a => a.id === parseInt(agentId));
+      return {
+        agentId: parseInt(agentId),
+        messageCount: messages.length,
+        firstMessageTick: messages[0]?.tick,
+        lastMessageTick: messages[messages.length - 1]?.tick,
+        genes: agent ? {
+          curiosity: agent.genes.curiosity,
+          creativity: agent.genes.creativity,
+          social: agent.genes.social,
+        } : null,
+        messages: messages.map(m => ({
+          tick: m.tick,
+          type: m.type,
+          content: m.content,
+          isQuestion: m.isQuestion,
+        })),
+      };
+    }),
+    questions: questions.map(q => ({
+      tick: q.tick,
+      agentId: q.agentId,
+      type: q.type,
+      content: q.content,
+    })),
+    statements: statements.map(s => ({
+      tick: s.tick,
+      agentId: s.agentId,
+      type: s.type,
+      content: s.content,
+    })),
+    analysis: {
+      mostTalkativeAgent: Object.entries(messagesByAgent)
+        .sort(([, a], [, b]) => b.length - a.length)[0] || null,
+      mostCommonMessageType: Object.entries(messagesByType)
+        .sort(([, a], [, b]) => b - a)[0]?.[0] || null,
+      averageTicksBetweenMessages: communicationLog.messages.length > 1
+        ? (communicationLog.messages[communicationLog.messages.length - 1].tick - 
+           communicationLog.messages[0].tick) / (communicationLog.messages.length - 1)
+        : 0,
+    },
+  };
+
+  downloadJSON(conversationData, `conversations_tick-${tick}_${timestamp}.json`);
 }

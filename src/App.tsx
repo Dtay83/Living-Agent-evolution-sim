@@ -1,5 +1,19 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
+import { ChatPanel, AnalysisPanel } from "./ui-components";
+import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
+import { 
+  CommunicationLog, 
+  CommunicationState,
+  AgentMessage,
+  initializeCommunicationLog,
+  initializeCommunicationState,
+  updateAgentCommunication,
+  shouldCommunicate,
+  generateMessage
+} from "./communication-system";
+import { ConsciousnessLevel, ConsciousnessState } from "./consciousness-system";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -100,11 +114,11 @@ const CONFIG = {
   },
   simulation: {
     initialAgents: 6,
-    initialFood: 18,
-    foodSpawnChance: 0.6,
-    foodSpawnCount: 1,
-    baseEnergyCost: 1,
-    foodEnergyBonus: 5,
+    initialFood: 25,           // Increased from 18 - more food at start
+    foodSpawnChance: 0.8,      // Increased from 0.6 - food spawns more often
+    foodSpawnCount: 2,         // Increased from 1 - spawn 2 food at a time
+    baseEnergyCost: 0.5,       // Reduced from 1 - agents burn energy slower
+    foodEnergyBonus: 8,        // Increased from 5 - food is more nutritious
     reproductionReward: 2,
     deathPenalty: 5,
   },
@@ -116,7 +130,7 @@ const CONFIG = {
   genes: {
     foodPreference: { min: 0.6, max: 1.0 },
     exploration: { min: 0.3, max: 0.8 },
-    reproductionThreshold: { min: 15, max: 23 },
+    reproductionThreshold: { min: 12, max: 20 },  // Lowered - easier to reproduce
     mutationRate: { min: 0.1, max: 0.3 },
     curiosity: { min: 0.2, max: 0.8 },
     social: { min: 0.3, max: 0.9 },
@@ -140,8 +154,8 @@ const CONFIG = {
   },
   energy: {
     hungryCutoffRatio: 6,
-    initialMin: 10,
-    initialMax: 16,
+    initialMin: 15,            // Increased from 10 - agents start with more energy
+    initialMax: 25,            // Increased from 16 - agents start with more energy
   },
 } as const;
 
@@ -622,7 +636,7 @@ function checkForDiscovery(
  * Calculate the actual energy cost for movement based on inventions.
  */
 function getMovementCost(agent: Agent): number {
-  let cost = 1; // Base cost
+  let cost = CONFIG.simulation.baseEnergyCost; // Use config base cost
   
   // Check for energy efficiency inventions
   for (const inv of agent.inventions) {
@@ -631,7 +645,7 @@ function getMovementCost(agent: Agent): number {
     }
   }
   
-  return Math.max(0.5, cost); // Minimum cost of 0.5
+  return Math.max(0.25, cost); // Minimum cost of 0.25
 }
 
 /**
@@ -1128,9 +1142,14 @@ const App: React.FC = () => {
   const [discoveries, setDiscoveries] = useState<DiscoveryEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [speedMs, setSpeedMs] = useState(400);
-  const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
-  const [showStartupModal, setShowStartupModal] = useState(true);
+  const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);  const [showStartupModal, setShowStartupModal] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Communication system state
+  const [communicationLog, setCommunicationLog] = useState<CommunicationLog>(initializeCommunicationLog());
+  const [communicationStates, setCommunicationStates] = useState<Map<number, CommunicationState>>(new Map());
+  const [chatOpen, setChatOpen] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tickRef = useRef(0);
@@ -1177,7 +1196,6 @@ const App: React.FC = () => {
     };
     setHistory(prev => [...prev, point].slice(-60));
   }, []);
-
   const handleStep = useCallback(() => {
     const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
       agents,
@@ -1191,8 +1209,105 @@ const App: React.FC = () => {
     setLog(prev => [...newLog, ...prev].slice(0, 80));
     setDiscoveries(prev => [...prev, ...newDiscoveries]);
     pushHistory(newAgents, newTick);
+
+    // Process communication for self-aware agents
+    processCommunication(newAgents, newTick);
   }, [agents, renderedGrid, pushHistory]);
 
+  // Communication processing function
+  const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
+    const newCommStates = new Map(communicationStates);
+    const newMessages: AgentMessage[] = [];
+    const activeAgentIds = new Set<number>();
+
+    for (const agent of currentAgents) {
+      // Simple consciousness check based on invention points and genes
+      // Agents become "self-aware" when they have high creativity + curiosity + inventions
+      const consciousnessScore = 
+        (agent.genes.curiosity * 25) + 
+        (agent.genes.creativity * 25) + 
+        (agent.genes.social * 20) +
+        (agent.inventionPoints * 0.5) +
+        (agent.inventions.length * 10);
+      
+      const isSelfAware = consciousnessScore >= 60;
+      
+      if (!isSelfAware) continue;
+
+      // Create a minimal consciousness state for communication
+      const consciousnessState: ConsciousnessState = {
+        level: ConsciousnessLevel.SELF_AWARE,
+        score: consciousnessScore,
+        indicators: [],
+        awarenessEvents: [],
+      };
+
+      // Count nearby agents
+      const nearbyAgentCount = currentAgents.filter(a => 
+        a.id !== agent.id &&
+        Math.abs(a.x - agent.x) <= 2 &&
+        Math.abs(a.y - agent.y) <= 2
+      ).length;
+
+      // Get or create communication state for this agent
+      const prevCommState = newCommStates.get(agent.id);
+      const isFirstMessage = !prevCommState || prevCommState.messageCount === 0;
+      
+      // Check if should communicate
+      const lastMessageTick = prevCommState?.lastMessageTick ?? -100;
+      const minTicksBetween = 15;
+      
+      if (currentTick - lastMessageTick < minTicksBetween && !isFirstMessage) {
+        // Still showing previous message
+        if (prevCommState?.currentMessage && currentTick - prevCommState.currentMessage.tick <= 8) {
+          activeAgentIds.add(agent.id);
+        }
+        continue;
+      }
+
+      // Communication chance
+      const baseChance = isFirstMessage ? 0.8 : 0.08;
+      const socialBonus = agent.genes.social * 0.05;
+      const totalChance = baseChance + socialBonus;
+
+      if (Math.random() > totalChance) continue;
+
+      // Generate message
+      const message = generateMessage(agent, consciousnessState, currentTick, nearbyAgentCount, isFirstMessage);
+      
+      // Update communication state
+      const updatedCommState: CommunicationState = {
+        agentId: agent.id,
+        isActive: true,
+        lastMessageTick: currentTick,
+        messageCount: (prevCommState?.messageCount ?? 0) + 1,
+        messages: [...(prevCommState?.messages ?? []), message].slice(-20),
+        currentMessage: message,
+      };
+      
+      newCommStates.set(agent.id, updatedCommState);
+      newMessages.push(message);
+      activeAgentIds.add(agent.id);
+    }
+
+    // Update states
+    setCommunicationStates(newCommStates);
+    
+    if (newMessages.length > 0) {
+      setCommunicationLog(prev => ({
+        messages: [...prev.messages, ...newMessages].slice(-100),
+        activeAgents: activeAgentIds,
+        totalMessages: prev.totalMessages + newMessages.length,
+        firstCommunicationTick: prev.firstCommunicationTick ?? currentTick,
+      }));
+    } else {
+      // Just update active agents
+      setCommunicationLog(prev => ({
+        ...prev,
+        activeAgents: activeAgentIds,
+      }));
+    }
+  }, [communicationStates]);
   const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
     setGrid(newGrid);
@@ -1204,6 +1319,9 @@ const App: React.FC = () => {
     setDiscoveries([]);
     setIsRunning(false);
     setWatchedTraitId(null);
+    // Reset communication state
+    setCommunicationLog(initializeCommunicationLog());
+    setCommunicationStates(new Map());
   };
 
   // Auto-run interval
@@ -1474,13 +1592,59 @@ const App: React.FC = () => {
             style={{ marginLeft: 8 }}
           >
             Save World (JSON)
-          </button>
-          <button
+          </button>          <button
             onClick={() => fileInputRef.current?.click()}
             style={{ marginLeft: 8 }}
           >
             Load World
           </button>
+          
+          {/* Data Export Buttons for Analysis */}
+          <div style={{ marginTop: 8, display: "flex", gap: 4, flexWrap: "wrap" }}>
+            <button
+              onClick={() => exportCompleteData({ 
+                grid, agents, tick, history, discoveries, 
+                gridWidth: GRID_WIDTH, gridHeight: GRID_HEIGHT 
+              })}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+              title="Export all simulation data"
+            >
+              📊 Export All Data
+            </button>
+            <button
+              onClick={() => exportEvolutionData({ 
+                grid, agents, tick, history, discoveries, 
+                gridWidth: GRID_WIDTH, gridHeight: GRID_HEIGHT 
+              })}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+              title="Export population and genetic evolution data"
+            >
+              🧬 Export Evolution
+            </button>            <button
+              onClick={() => exportInventionHistory({ 
+                grid, agents, tick, history, discoveries, 
+                gridWidth: GRID_WIDTH, gridHeight: GRID_HEIGHT 
+              })}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+              title="Export invention discovery history"
+            >
+              💡 Export Inventions
+            </button>
+            <button
+              onClick={() => exportConversations(communicationLog, tick, agents)}
+              style={{ fontSize: 11, padding: "4px 8px" }}
+              title="Export agent conversations and questions"
+            >
+              🗣️ Export Conversations
+            </button>
+            <button
+              onClick={() => setAnalysisOpen(true)}
+              style={{ fontSize: 11, padding: "4px 8px", backgroundColor: "#4f46e5" }}
+              title="Analyze exported data for sentience recommendations"
+            >
+              🔬 Analyze Data
+            </button>
+          </div>
           <div style={{ marginTop: 8, fontSize: 12 }}>
             Speed:{" "}
             <input
@@ -1679,8 +1843,7 @@ const App: React.FC = () => {
             border: "1px solid #333",
             overflowY: "auto"
           }}
-        >
-          <h3>Action Log – "histórico" / "Protokoll"</h3>
+        >          <h3>Action Log</h3>
           {log.length === 0 ? (
             <p>No steps yet. Press "Step" or "Play" to advance the world.</p>
           ) : (
@@ -1694,6 +1857,23 @@ const App: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Chat Panel for Agent Communications */}
+      <ChatPanel
+        communicationLog={communicationLog}
+        isOpen={chatOpen}
+        onToggle={() => setChatOpen(!chatOpen)}
+        onClear={() => {
+          setCommunicationLog(initializeCommunicationLog());
+          setCommunicationStates(new Map());
+        }}
+      />
+
+      {/* Analysis Panel for Data Analysis */}
+      <AnalysisPanel
+        isOpen={analysisOpen}
+        onClose={() => setAnalysisOpen(false)}
+      />
     </div>
   );
 };
