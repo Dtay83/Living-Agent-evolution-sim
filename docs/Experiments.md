@@ -1,7 +1,6 @@
 # Experiments Log – Living-Agent Evolution Sim
 
-This file is the main log of all simulation **experiments**  
-("experiências" – Portuguese, Portugal · "Versuche" – Swiss German, Zürich).
+This file is the main log of all simulation **experiments**.
 
 Each run gets an ID so it’s easy to refer back to a specific world state, JSON snapshot, or code version.
 

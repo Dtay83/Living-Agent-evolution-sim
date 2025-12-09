@@ -232,7 +232,7 @@ export function stepWorld(
           energy: childEnergy,
           genes: childGenes,
           memory: { qTable: {} },
-          lastRule: 'Born (memória genética + "Mutation")',
+          lastRule: 'Born (genetic memory + "Mutation")',
           inventions: inheritedInventions.map(inv => ({
             ...inv,
             // Mark as inherited, not discovered by this agent
@@ -252,7 +252,7 @@ export function stepWorld(
           ? ` inherited ${inheritedInventions.length} inventions`
           : '';
         logs.push(
-          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energia ${childEnergy}${inheritMsg}`
+          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energy ${childEnergy}${inheritMsg}`
         );
       }
     }
@@ -277,18 +277,16 @@ export function stepWorld(
 
     if (parentAgent.energy > 0) {
       updatedAgents.push(parentAgent);
-      newGrid[parentAgent.y][parentAgent.x].agentId = parentAgent.id;
-
-      logs.push(
+      newGrid[parentAgent.y][parentAgent.x].agentId = parentAgent.id;      logs.push(
         `Agent ${parentAgent.id} used ${decision.rule}, moved to (${parentAgent.x},${parentAgent.y})` +
-          (ateFood ? " and ate food (+5 energia)" : "") +
+          (ateFood ? " and ate food (+5 energy)" : "") +
           (reproduced ? " and reproduced (+2 reward)" : "") +
-          `, energia now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
+          `, energy now ${parentAgent.energy}, traitId=${parentAgent.genes.traitId}`
       );
     } else {
       reward -= CONFIG.simulation.deathPenalty;
       logs.push(
-        `Agent ${agent.id} ran out of energia at (${finalX},${finalY}) and was removed.`
+        `Agent ${agent.id} ran out of energy at (${finalX},${finalY}) and was removed.`
       );
     }
   }

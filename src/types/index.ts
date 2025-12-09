@@ -11,7 +11,7 @@ export type Direction = "up" | "down" | "left" | "right" | "stay";
 export interface Genes {
   foodPreference: number;        // 0–1: prioritize food when hungry
   exploration: number;           // 0–1: how often they wander
-  reproductionThreshold: number; // energia needed to reproduce
+  reproductionThreshold: number; // energy needed to reproduce
   mutationRate: number;          // 0–1: chance each gene mutates
   traitId: number;               // lineage / random trait marker
   
@@ -69,7 +69,7 @@ export interface Agent {
   id: number;
   x: number;
   y: number;
-  energy: number; // "energia"
+  energy: number;
   genes: Genes;
   memory: Memory;
   lastRule?: string;
