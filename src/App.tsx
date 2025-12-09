@@ -530,12 +530,11 @@ function decideMove(
   stateKey: string
 ): { dir: Direction; rule: string; action: Direction } {
   const { x, y, energy, genes } = agent;
-
   const neighbors: { x: number; y: number; dir: Direction }[] = [
-    { x, y: y - 1, dir: "up" },
-    { x, y: y + 1, dir: "down" },
-    { x: x - 1, y, dir: "left" },
-    { x: x + 1, y, dir: "right" }
+    { x, y: y - 1, dir: "up" as Direction },
+    { x, y: y + 1, dir: "down" as Direction },
+    { x: x - 1, y, dir: "left" as Direction },
+    { x: x + 1, y, dir: "right" as Direction }
   ].filter(
     p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
   );
@@ -1146,9 +1145,8 @@ const App: React.FC = () => {
     agents.forEach(a => map.set(a.id, a));
     return map;
   }, [agents]);
-
   const renderedGrid = useMemo(() => {
-    const copy = grid.map(row => row.map(cell => ({ ...cell, agentId: undefined })));
+    const copy: Cell[][] = grid.map(row => row.map(cell => ({ ...cell, agentId: undefined as number | undefined })));
     for (const agent of agents) {
       if (
         agent.x >= 0 &&
