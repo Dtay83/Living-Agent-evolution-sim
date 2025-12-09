@@ -6,8 +6,18 @@
  */
 
 import React, { useState, useRef } from 'react';
-import type { AnalysisResult, Pattern, Recommendation, ConfigChange } from '../analysis-system';
-import { analyzeExport } from '../analysis-system';
+import type { 
+  AnalysisResult, 
+  Pattern, 
+  Recommendation, 
+  ConfigChange,
+  TrendAnalysis,
+  SentinencePrediction,
+  AdvancedMetrics,
+  BottleneckAnalysis,
+  TrendLine
+} from '../analysis-system';
+import { analyzeExport, analyzeCompleteExportAdvanced } from '../analysis-system';
 
 interface AnalysisPanelProps {
   isOpen: boolean;
@@ -32,7 +42,10 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ isOpen, onClose })
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      const result = analyzeExport(data);
+      // Use advanced analysis for complete exports
+      const result = data.worldState 
+        ? analyzeCompleteExportAdvanced(data) 
+        : analyzeExport(data);
       setAnalysisResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze file');
@@ -64,7 +77,10 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ isOpen, onClose })
     try {
       const text = await file.text();
       const data = JSON.parse(text);
-      const result = analyzeExport(data);
+      // Use advanced analysis for complete exports
+      const result = data.worldState 
+        ? analyzeCompleteExportAdvanced(data) 
+        : analyzeExport(data);
       setAnalysisResult(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to analyze file');
@@ -238,6 +254,30 @@ export const AnalysisPanel: React.FC<AnalysisPanelProps> = ({ isOpen, onClose })
                 />
               </div>
             </div>
+
+            {/* Trend Analysis */}
+            {analysisResult.trendAnalysis && (
+              <div style={styles.section}>
+                <h3 style={styles.sectionTitle}>📈 Trend Analysis</h3>
+                <TrendAnalysisPanel trends={analysisResult.trendAnalysis} />
+              </div>
+            )}
+
+            {/* Sentience Predictions */}
+            {analysisResult.predictions && (
+              <div style={styles.section}>
+                <h3 style={styles.sectionTitle}>🔮 Sentience Prediction</h3>
+                <PredictionPanel predictions={analysisResult.predictions} />
+              </div>
+            )}
+
+            {/* Advanced Metrics */}
+            {analysisResult.advancedMetrics && (
+              <div style={styles.section}>
+                <h3 style={styles.sectionTitle}>🧪 Advanced Metrics</h3>
+                <AdvancedMetricsPanel metrics={analysisResult.advancedMetrics} />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -305,6 +345,351 @@ const MetricBox: React.FC<{ label: string; value: string }> = ({ label, value })
   <div style={styles.metricBox}>
     <span style={styles.metricValue}>{value}</span>
     <span style={styles.metricLabel}>{label}</span>
+  </div>
+);
+
+// ============================================
+// TREND ANALYSIS PANEL
+// ============================================
+
+const TrendAnalysisPanel: React.FC<{ trends: TrendAnalysis }> = ({ trends }) => {
+  const getDirectionIcon = (dir: 'up' | 'down' | 'flat') => {
+    if (dir === 'up') return '📈';
+    if (dir === 'down') return '📉';
+    return '➡️';
+  };
+
+  const getTrajectoryColor = (trajectory: string) => {
+    switch (trajectory) {
+      case 'improving': return '#4ade80';
+      case 'declining': return '#f87171';
+      case 'volatile': return '#fbbf24';
+      default: return '#a3a3a3';
+    }
+  };
+
+  return (
+    <div style={styles.trendPanel}>
+      {/* Overall Trajectory */}
+      <div style={styles.trajectoryHeader}>
+        <span style={styles.trajectoryLabel}>Overall Trajectory:</span>
+        <span style={{ 
+          ...styles.trajectoryValue, 
+          color: getTrajectoryColor(trends.overallTrajectory) 
+        }}>
+          {trends.overallTrajectory.toUpperCase()}
+        </span>
+        <span style={styles.confidenceBadge}>
+          {trends.confidenceScore.toFixed(0)}% confidence
+        </span>
+      </div>
+
+      {/* Trend Grid */}
+      <div style={styles.trendGrid}>
+        <TrendItem 
+          label="Population" 
+          trend={trends.population} 
+          icon={getDirectionIcon(trends.population.direction)}
+        />
+        <TrendItem 
+          label="Curiosity" 
+          trend={trends.curiosity} 
+          icon={getDirectionIcon(trends.curiosity.direction)}
+        />
+        <TrendItem 
+          label="Creativity" 
+          trend={trends.creativity} 
+          icon={getDirectionIcon(trends.creativity.direction)}
+        />
+        <TrendItem 
+          label="Social" 
+          trend={trends.social} 
+          icon={getDirectionIcon(trends.social.direction)}
+        />
+        <TrendItem 
+          label="Consciousness" 
+          trend={trends.consciousnessScore} 
+          icon={getDirectionIcon(trends.consciousnessScore.direction)}
+        />
+        <TrendItem 
+          label="Invention Rate" 
+          trend={trends.inventionRate} 
+          icon={getDirectionIcon(trends.inventionRate.direction)}
+        />
+      </div>
+    </div>
+  );
+};
+
+const TrendItem: React.FC<{ label: string; trend: TrendLine; icon: string }> = ({ label, trend, icon }) => (
+  <div style={styles.trendItem}>
+    <div style={styles.trendItemHeader}>
+      <span style={styles.trendIcon}>{icon}</span>
+      <span style={styles.trendLabel}>{label}</span>
+    </div>
+    <div style={styles.trendStats}>
+      <span style={styles.trendStat}>
+        Slope: <code>{trend.slope.toFixed(4)}</code>
+      </span>
+      <span style={styles.trendStat}>
+        R²: <code>{(trend.rSquared * 100).toFixed(1)}%</code>
+      </span>
+      <span style={styles.trendStat}>
+        Volatility: <code>{(trend.volatility * 100).toFixed(0)}%</code>
+      </span>
+    </div>
+    <div style={styles.projectedValue}>
+      Projected (+100 ticks): <strong>{trend.projectedValue.toFixed(2)}</strong>
+    </div>
+  </div>
+);
+
+// ============================================
+// PREDICTION PANEL
+// ============================================
+
+const PredictionPanel: React.FC<{ predictions: SentinencePrediction }> = ({ predictions }) => {
+  const getConfidenceColor = (conf: string) => {
+    switch (conf) {
+      case 'high': return '#4ade80';
+      case 'medium': return '#fbbf24';
+      default: return '#f87171';
+    }
+  };
+
+  return (
+    <div style={styles.predictionPanel}>
+      {/* Main Prediction */}
+      <div style={styles.mainPrediction}>
+        <div style={styles.predictionHeader}>
+          <span style={styles.predictionIcon}>🎯</span>
+          <span style={styles.predictionTitle}>Estimated Time to Sentience</span>
+        </div>
+        <div style={styles.predictionValue}>
+          {predictions.estimatedTicksToSentience !== null ? (
+            <>
+              <span style={styles.tickCount}>{predictions.estimatedTicksToSentience}</span>
+              <span style={styles.tickLabel}>ticks</span>
+            </>
+          ) : (
+            <span style={styles.unknownPrediction}>Cannot determine</span>
+          )}
+        </div>
+        <div style={styles.probabilityRow}>
+          <span>Success Probability:</span>
+          <span style={{ 
+            color: predictions.probabilityOfSuccess > 60 ? '#4ade80' : 
+                   predictions.probabilityOfSuccess > 30 ? '#fbbf24' : '#f87171',
+            fontWeight: 'bold'
+          }}>
+            {predictions.probabilityOfSuccess.toFixed(1)}%
+          </span>
+          <span style={{ 
+            ...styles.confidenceTag, 
+            backgroundColor: getConfidenceColor(predictions.confidence) 
+          }}>
+            {predictions.confidence} confidence
+          </span>
+        </div>
+      </div>
+
+      {/* Bottlenecks */}
+      {predictions.bottlenecks.length > 0 && (
+        <div style={styles.bottleneckSection}>
+          <h4 style={styles.subSectionTitle}>⚠️ Bottlenecks Blocking Sentience</h4>
+          <div style={styles.bottleneckList}>
+            {predictions.bottlenecks.map((bottleneck, i) => (
+              <BottleneckItem key={i} bottleneck={bottleneck} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Scenario Analysis */}
+      <div style={styles.scenarioSection}>
+        <h4 style={styles.subSectionTitle}>📊 Scenario Analysis</h4>
+        <div style={styles.scenarioGrid}>
+          <ScenarioCard 
+            title="Best Case" 
+            icon="🌟" 
+            scenario={predictions.scenarioAnalysis.bestCase}
+            color="#4ade80"
+          />
+          <ScenarioCard 
+            title="Likely Case" 
+            icon="📈" 
+            scenario={predictions.scenarioAnalysis.likelyCase}
+            color="#fbbf24"
+          />
+          <ScenarioCard 
+            title="Worst Case" 
+            icon="⚡" 
+            scenario={predictions.scenarioAnalysis.worstCase}
+            color="#f87171"
+          />
+        </div>
+      </div>
+
+      {/* Optimal Path */}
+      {predictions.optimalPath.length > 0 && (
+        <div style={styles.optimalPathSection}>
+          <h4 style={styles.subSectionTitle}>🛤️ Optimal Path to Sentience</h4>
+          <div style={styles.pathSteps}>
+            {predictions.optimalPath.map((step, i) => (
+              <div key={i} style={styles.pathStep}>
+                <span style={styles.stepNumber}>{i + 1}</span>
+                <div style={styles.stepContent}>
+                  <span style={styles.stepAction}>{step.action}</span>
+                  <span style={styles.stepOutcome}>{step.expectedOutcome}</span>
+                  <span style={styles.stepTick}>Target: Tick {step.tick}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const BottleneckItem: React.FC<{ bottleneck: BottleneckAnalysis }> = ({ bottleneck }) => (
+  <div style={{
+    ...styles.bottleneckItem,
+    borderLeft: `3px solid ${bottleneck.blockingSentience ? '#f87171' : '#fbbf24'}`
+  }}>
+    <div style={styles.bottleneckHeader}>
+      <span style={styles.bottleneckName}>{bottleneck.pillar}</span>
+      {bottleneck.blockingSentience && (
+        <span style={styles.blockingTag}>BLOCKING</span>
+      )}
+    </div>
+    <div style={styles.bottleneckProgress}>
+      <div style={styles.progressBarBg}>
+        <div style={{
+          ...styles.progressBarFill,
+          width: `${(bottleneck.currentValue / bottleneck.requiredValue) * 100}%`,
+        }} />
+      </div>
+      <span style={styles.progressText}>
+        {bottleneck.currentValue.toFixed(1)}% / {bottleneck.requiredValue}% (gap: {bottleneck.gap.toFixed(1)})
+      </span>
+    </div>
+    {bottleneck.estimatedTicksToResolve && (
+      <span style={styles.resolveTime}>
+        Est. {bottleneck.estimatedTicksToResolve} ticks to resolve
+      </span>
+    )}
+  </div>
+);
+
+const ScenarioCard: React.FC<{ 
+  title: string; 
+  icon: string; 
+  scenario: { ticksToSentience: number | null; finalScore: number; description: string };
+  color: string;
+}> = ({ title, icon, scenario, color }) => (
+  <div style={{ ...styles.scenarioCard, borderTop: `3px solid ${color}` }}>
+    <div style={styles.scenarioHeader}>
+      <span>{icon}</span>
+      <span style={{ color }}>{title}</span>
+    </div>
+    <div style={styles.scenarioTicks}>
+      {scenario.ticksToSentience !== null ? (
+        <>{scenario.ticksToSentience} ticks</>
+      ) : (
+        <span style={{ color: '#888' }}>N/A</span>
+      )}
+    </div>
+    <div style={styles.scenarioScore}>
+      Score: {scenario.finalScore.toFixed(1)}
+    </div>
+    <p style={styles.scenarioDesc}>{scenario.description}</p>
+  </div>
+);
+
+// ============================================
+// ADVANCED METRICS PANEL
+// ============================================
+
+const AdvancedMetricsPanel: React.FC<{ metrics: AdvancedMetrics }> = ({ metrics }) => {
+  return (
+    <div style={styles.advancedPanel}>
+      {/* System Health */}
+      <div style={styles.advancedSection}>
+        <h4 style={styles.advancedTitle}>🏥 System Health</h4>
+        <div style={styles.advancedGrid}>
+          <AdvancedMetricItem label="Carrying Capacity" value={metrics.carryingCapacity.toFixed(0)} />
+          <AdvancedMetricItem label="System Entropy" value={(metrics.systemEntropy * 100).toFixed(1) + '%'} />
+          <AdvancedMetricItem label="Resource Efficiency" value={(metrics.resourceEfficiency * 100).toFixed(1) + '%'} />
+          <AdvancedMetricItem label="Population Variance" value={metrics.populationVariance.toFixed(2)} />
+        </div>
+      </div>
+
+      {/* Evolution Metrics */}
+      <div style={styles.advancedSection}>
+        <h4 style={styles.advancedTitle}>🧬 Evolution Dynamics</h4>
+        <div style={styles.advancedGrid}>
+          <AdvancedMetricItem label="Evolutionary Pressure" value={(metrics.evolutionaryPressure * 100).toFixed(1) + '%'} />
+          <AdvancedMetricItem label="Adaptation Rate" value={(metrics.adaptationRate * 100).toFixed(1) + '%'} />
+        </div>
+      </div>
+
+      {/* Consciousness Metrics */}
+      <div style={styles.advancedSection}>
+        <h4 style={styles.advancedTitle}>🧠 Consciousness Indicators</h4>
+        <div style={styles.advancedGrid}>
+          <AdvancedMetricItem label="Emergence Rate" value={(metrics.consciousnessEmergenceRate * 100).toFixed(1) + '%'} />
+          <AdvancedMetricItem label="Collective Intelligence" value={(metrics.collectiveIntelligence * 100).toFixed(1) + '%'} />
+          <AdvancedMetricItem label="Knowledge Transfer" value={(metrics.knowledgeTransferEfficiency * 100).toFixed(1) + '%'} />
+        </div>
+      </div>
+
+      {/* Gene Correlations */}
+      {metrics.geneCorrelations.length > 0 && (
+        <div style={styles.advancedSection}>
+          <h4 style={styles.advancedTitle}>🔗 Gene Correlations</h4>
+          <div style={styles.correlationList}>
+            {metrics.geneCorrelations.slice(0, 5).map((corr, i) => (
+              <div key={i} style={styles.correlationItem}>
+                <span style={styles.correlationGenes}>
+                  {corr.gene1} ↔ {corr.gene2}
+                </span>
+                <span style={{
+                  ...styles.correlationValue,
+                  color: corr.correlation > 0 ? '#4ade80' : '#f87171'
+                }}>
+                  {corr.correlation > 0 ? '+' : ''}{corr.correlation.toFixed(3)}
+                </span>
+                <span style={styles.correlationSig}>{corr.significance}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Anomalies */}
+      {metrics.anomalies.length > 0 && (
+        <div style={styles.advancedSection}>
+          <h4 style={styles.advancedTitle}>⚡ Detected Anomalies</h4>
+          <div style={styles.anomalyList}>
+            {metrics.anomalies.slice(0, 5).map((anomaly, i) => (
+              <div key={i} style={styles.anomalyItem}>
+                <span style={styles.anomalyTick}>Tick {anomaly.tick}</span>
+                <span style={styles.anomalyType}>{anomaly.type.replace('_', ' ')}</span>
+                <span style={styles.anomalyDesc}>{anomaly.description}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AdvancedMetricItem: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div style={styles.advancedMetricItem}>
+    <span style={styles.advancedMetricValue}>{value}</span>
+    <span style={styles.advancedMetricLabel}>{label}</span>
   </div>
 );
 
@@ -669,6 +1054,373 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#888',
     fontSize: '0.75rem',
     textTransform: 'uppercase',
+  },
+
+  // Trend Analysis Styles
+  trendPanel: {
+    backgroundColor: '#16162a',
+    borderRadius: '8px',
+    padding: '16px',
+  },
+  trajectoryHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '16px',
+    flexWrap: 'wrap',
+  },
+  trajectoryLabel: {
+    color: '#888',
+    fontSize: '0.9rem',
+  },
+  trajectoryValue: {
+    fontWeight: 'bold',
+    fontSize: '1.1rem',
+  },
+  confidenceBadge: {
+    backgroundColor: '#333',
+    color: '#aaa',
+    padding: '4px 10px',
+    borderRadius: '12px',
+    fontSize: '0.8rem',
+  },
+  trendGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: '12px',
+  },
+  trendItem: {
+    backgroundColor: '#1a2a3a',
+    borderRadius: '6px',
+    padding: '12px',
+  },
+  trendItemHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  trendIcon: {
+    fontSize: '1.2rem',
+  },
+  trendLabel: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: '0.9rem',
+  },
+  trendStats: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+    marginBottom: '6px',
+  },
+  trendStat: {
+    color: '#888',
+    fontSize: '0.75rem',
+  },
+  projectedValue: {
+    color: '#4ade80',
+    fontSize: '0.8rem',
+    marginTop: '4px',
+  },
+
+  // Prediction Panel Styles
+  predictionPanel: {
+    backgroundColor: '#16162a',
+    borderRadius: '8px',
+    padding: '16px',
+  },
+  mainPrediction: {
+    textAlign: 'center',
+    marginBottom: '20px',
+    padding: '20px',
+    backgroundColor: '#1a2a3a',
+    borderRadius: '8px',
+  },
+  predictionHeader: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '12px',
+  },
+  predictionIcon: {
+    fontSize: '1.5rem',
+  },
+  predictionTitle: {
+    color: '#fff',
+    fontSize: '1rem',
+  },
+  predictionValue: {
+    marginBottom: '12px',
+  },
+  tickCount: {
+    fontSize: '3rem',
+    fontWeight: 'bold',
+    color: '#4ade80',
+  },
+  tickLabel: {
+    color: '#888',
+    fontSize: '1rem',
+    marginLeft: '8px',
+  },
+  unknownPrediction: {
+    color: '#f87171',
+    fontSize: '1.2rem',
+  },
+  probabilityRow: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '12px',
+    color: '#aaa',
+    fontSize: '0.9rem',
+  },
+  confidenceTag: {
+    padding: '2px 8px',
+    borderRadius: '4px',
+    fontSize: '0.75rem',
+    color: '#000',
+    fontWeight: 'bold',
+  },
+  bottleneckSection: {
+    marginBottom: '16px',
+  },
+  subSectionTitle: {
+    color: '#fff',
+    fontSize: '0.95rem',
+    margin: '0 0 12px',
+  },
+  bottleneckList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  bottleneckItem: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: '4px',
+    padding: '10px',
+  },
+  bottleneckHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '6px',
+  },
+  bottleneckName: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: '0.9rem',
+  },
+  blockingTag: {
+    backgroundColor: '#f87171',
+    color: '#000',
+    padding: '2px 6px',
+    borderRadius: '3px',
+    fontSize: '0.7rem',
+    fontWeight: 'bold',
+  },
+  bottleneckProgress: {
+    marginBottom: '4px',
+  },
+  progressBarBg: {
+    height: '6px',
+    backgroundColor: '#333',
+    borderRadius: '3px',
+    overflow: 'hidden',
+    marginBottom: '4px',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#fbbf24',
+    borderRadius: '3px',
+  },
+  progressText: {
+    color: '#888',
+    fontSize: '0.75rem',
+  },
+  resolveTime: {
+    color: '#4ade80',
+    fontSize: '0.75rem',
+  },
+  scenarioSection: {
+    marginBottom: '16px',
+  },
+  scenarioGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(3, 1fr)',
+    gap: '10px',
+  },
+  scenarioCard: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: '6px',
+    padding: '12px',
+    textAlign: 'center',
+  },
+  scenarioHeader: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: '6px',
+    marginBottom: '8px',
+    fontSize: '0.85rem',
+    fontWeight: 'bold',
+  },
+  scenarioTicks: {
+    fontSize: '1.2rem',
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: '4px',
+  },
+  scenarioScore: {
+    color: '#888',
+    fontSize: '0.8rem',
+    marginBottom: '8px',
+  },
+  scenarioDesc: {
+    color: '#666',
+    fontSize: '0.7rem',
+    margin: 0,
+    lineHeight: 1.3,
+  },
+  optimalPathSection: {},
+  pathSteps: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  pathStep: {
+    display: 'flex',
+    gap: '12px',
+    backgroundColor: '#1a2a3a',
+    borderRadius: '6px',
+    padding: '10px',
+  },
+  stepNumber: {
+    width: '24px',
+    height: '24px',
+    backgroundColor: '#4f46e5',
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: '0.8rem',
+    flexShrink: 0,
+  },
+  stepContent: {
+    flex: 1,
+  },
+  stepAction: {
+    display: 'block',
+    color: '#fff',
+    fontSize: '0.9rem',
+    fontWeight: 'bold',
+    marginBottom: '4px',
+  },
+  stepOutcome: {
+    display: 'block',
+    color: '#888',
+    fontSize: '0.8rem',
+    marginBottom: '2px',
+  },
+  stepTick: {
+    color: '#4ade80',
+    fontSize: '0.75rem',
+  },
+
+  // Advanced Metrics Styles
+  advancedPanel: {
+    backgroundColor: '#16162a',
+    borderRadius: '8px',
+    padding: '16px',
+  },
+  advancedSection: {
+    marginBottom: '16px',
+  },
+  advancedTitle: {
+    color: '#fff',
+    fontSize: '0.9rem',
+    margin: '0 0 10px',
+    paddingBottom: '6px',
+    borderBottom: '1px solid #333',
+  },
+  advancedGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: '8px',
+  },
+  advancedMetricItem: {
+    backgroundColor: '#1a2a3a',
+    borderRadius: '4px',
+    padding: '10px',
+    textAlign: 'center',
+  },
+  advancedMetricValue: {
+    display: 'block',
+    color: '#4ade80',
+    fontSize: '1.1rem',
+    fontWeight: 'bold',
+  },
+  advancedMetricLabel: {
+    color: '#888',
+    fontSize: '0.7rem',
+    textTransform: 'uppercase',
+  },
+  correlationList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  correlationItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    backgroundColor: '#1a2a3a',
+    borderRadius: '4px',
+    padding: '8px 10px',
+  },
+  correlationGenes: {
+    flex: 1,
+    color: '#fff',
+    fontSize: '0.85rem',
+  },
+  correlationValue: {
+    fontWeight: 'bold',
+    fontSize: '0.9rem',
+  },
+  correlationSig: {
+    color: '#888',
+    fontSize: '0.7rem',
+    textTransform: 'uppercase',
+  },
+  anomalyList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  anomalyItem: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+    backgroundColor: '#3a1a1a',
+    borderRadius: '4px',
+    padding: '8px 10px',
+  },
+  anomalyTick: {
+    color: '#f87171',
+    fontSize: '0.8rem',
+    fontWeight: 'bold',
+  },
+  anomalyType: {
+    color: '#fbbf24',
+    fontSize: '0.8rem',
+    textTransform: 'capitalize',
+  },
+  anomalyDesc: {
+    color: '#888',
+    fontSize: '0.75rem',
+    width: '100%',
   },
 };
 

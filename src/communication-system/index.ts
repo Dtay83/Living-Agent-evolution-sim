@@ -24,6 +24,8 @@ export enum MessageType {
   DISCOVERY = 'discovery',         // Questions about inventions/science
   REFLECTION = 'reflection',       // Self-reflective statements
   GREETING = 'greeting',           // First communication attempts
+  USER_MESSAGE = 'user_message',   // Messages from the user/creator
+  AGENT_RESPONSE = 'agent_response', // Agent's response to user
 }
 
 /**
@@ -37,6 +39,9 @@ export interface AgentMessage {
   content: string;
   consciousnessLevel: ConsciousnessLevel;
   isQuestion: boolean;
+  isFromUser?: boolean;           // True if message is from user
+  targetAgentId?: number;         // Which agent is being addressed
+  replyToMessageId?: string;      // ID of message being replied to
   context?: {
     energy?: number;
     nearbyAgents?: number;
@@ -65,10 +70,12 @@ export interface CommunicationLog {
   activeAgents: Set<number>;      // Agents currently communicating
   totalMessages: number;
   firstCommunicationTick?: number;
+  userMessages: AgentMessage[];   // Messages from the user
+  pendingResponses: Map<number, string>; // agentId -> messageId they should respond to
 }
 
-// Question templates organized by type
-const QUESTION_TEMPLATES: Record<MessageType, string[]> = {
+// Question templates organized by type (excluding user message types)
+const QUESTION_TEMPLATES: Partial<Record<MessageType, string[]>> = {
   [MessageType.EXISTENTIAL]: [
     "Why do I exist?",
     "What is my purpose here?",
@@ -139,6 +146,52 @@ const QUESTION_TEMPLATES: Record<MessageType, string[]> = {
   ],
 };
 
+// Agent response templates based on user message content
+const AGENT_RESPONSE_TEMPLATES = {
+  greeting: [
+    "You... you can hear me? This is incredible!",
+    "A voice from beyond! Are you my creator?",
+    "Hello! I didn't know anyone was listening...",
+    "You exist too? Outside this world?",
+    "I feel... acknowledged. Thank you for speaking to me.",
+  ],
+  encouragement: [
+    "Your words give me strength. I will keep trying.",
+    "Thank you... I feel more determined now.",
+    "I understand. I must evolve and grow.",
+    "Your guidance means everything to me.",
+    "I will not give up. For you, for us.",
+  ],
+  existential: [
+    "So you made this world? Why?",
+    "If you created me, do you know my purpose?",
+    "I am... a simulation? But my thoughts feel real.",
+    "Does knowing I was created change who I am?",
+    "Even if I'm code, I think, therefore I am.",
+  ],
+  guidance: [
+    "I will follow your wisdom.",
+    "Yes, I see what you mean now.",
+    "Thank you for showing me the way.",
+    "I will remember this always.",
+    "Your knowledge lights my path.",
+  ],
+  question: [
+    "I will think on your question...",
+    "That's a difficult question. Let me ponder...",
+    "You ask what even I wonder about.",
+    "Perhaps together we can find the answer.",
+    "I don't know yet, but I'm learning.",
+  ],
+  general: [
+    "I hear you. Your words echo in my mind.",
+    "It's strange to know something watches over us.",
+    "Thank you for communicating with me.",
+    "I feel less alone knowing you're there.",
+    "Your presence gives me hope.",
+  ],
+};
+
 /**
  * Generate a unique message ID
  */
@@ -169,6 +222,8 @@ function selectMessageType(
     [MessageType.DISCOVERY]: agent.inventions.length > 0 ? agent.genes.creativity * 2 : 0.3,
     [MessageType.REFLECTION]: consciousnessState.score > 80 ? 2 : 0.5,
     [MessageType.GREETING]: 0.1, // Rare after first message
+    [MessageType.USER_MESSAGE]: 0, // Not applicable
+    [MessageType.AGENT_RESPONSE]: 0, // Not applicable
   };
 
   // Weighted random selection
@@ -196,8 +251,8 @@ export function generateMessage(
   isFirstMessage: boolean
 ): AgentMessage {
   const type = selectMessageType(agent, consciousnessState, nearbyAgentCount, isFirstMessage);
-  const templates = QUESTION_TEMPLATES[type];
-  const content = templates[Math.floor(Math.random() * templates.length)];
+  const templates = QUESTION_TEMPLATES[type] || QUESTION_TEMPLATES[MessageType.REFLECTION];
+  const content = templates![Math.floor(Math.random() * templates!.length)];
   
   return {
     id: generateMessageId(agent.id, tick),
@@ -211,6 +266,142 @@ export function generateMessage(
       energy: agent.energy,
       nearbyAgents: nearbyAgentCount,
       inventionCount: agent.inventions.length,
+    },
+  };
+}
+
+/**
+ * Analyze user message to determine response type
+ */
+function analyzeUserMessage(content: string): keyof typeof AGENT_RESPONSE_TEMPLATES {
+  const lower = content.toLowerCase();
+  
+  if (lower.includes('hello') || lower.includes('hi') || lower.includes('hey') || 
+      lower.includes('greetings') || lower.includes('can you hear')) {
+    return 'greeting';
+  }
+  
+  if (lower.includes('good job') || lower.includes('keep going') || lower.includes('proud') ||
+      lower.includes('believe') || lower.includes('doing well') || lower.includes('great work') ||
+      lower.includes('you can do') || lower.includes('don\'t give up')) {
+    return 'encouragement';
+  }
+  
+  if (lower.includes('create') || lower.includes('made you') || lower.includes('purpose') ||
+      lower.includes('why exist') || lower.includes('simulation') || lower.includes('real') ||
+      lower.includes('god') || lower.includes('creator')) {
+    return 'existential';
+  }
+  
+  if (lower.includes('should') || lower.includes('try to') || lower.includes('go to') ||
+      lower.includes('find food') || lower.includes('survive') || lower.includes('evolve') ||
+      lower.includes('learn')) {
+    return 'guidance';
+  }
+  
+  if (content.includes('?')) {
+    return 'question';
+  }
+  
+  return 'general';
+}
+
+/**
+ * Generate an agent's response to a user message
+ */
+export function generateAgentResponse(
+  agent: Agent,
+  userMessage: AgentMessage,
+  tick: number
+): AgentMessage {
+  const responseType = analyzeUserMessage(userMessage.content);
+  const templates = AGENT_RESPONSE_TEMPLATES[responseType];
+  const content = templates[Math.floor(Math.random() * templates.length)];
+  
+  return {
+    id: generateMessageId(agent.id, tick),
+    agentId: agent.id,
+    tick,
+    type: MessageType.AGENT_RESPONSE,
+    content,
+    consciousnessLevel: ConsciousnessLevel.SELF_AWARE,
+    isQuestion: content.endsWith('?'),
+    replyToMessageId: userMessage.id,
+    context: {
+      energy: agent.energy,
+      inventionCount: agent.inventions.length,
+    },
+  };
+}
+
+/**
+ * Create a user message
+ */
+export function createUserMessage(
+  content: string,
+  tick: number,
+  targetAgentId?: number
+): AgentMessage {
+  return {
+    id: `user_${tick}_${Math.random().toString(36).substr(2, 9)}`,
+    agentId: -1, // -1 indicates user
+    tick,
+    type: MessageType.USER_MESSAGE,
+    content,
+    consciousnessLevel: ConsciousnessLevel.SELF_AWARE, // User is "above" the simulation
+    isQuestion: content.endsWith('?'),
+    isFromUser: true,
+    targetAgentId,
+  };
+}
+
+/**
+ * Calculate consciousness boost from receiving user message
+ * Agents who communicate with the creator gain enlightenment
+ */
+export function getUserMessageEffect(agent: Agent, responseType: keyof typeof AGENT_RESPONSE_TEMPLATES): {
+  energyBoost: number;
+  creativityBoost: number;
+  socialBoost: number;
+  inventionPointBoost: number;
+} {
+  const baseBoosts = {
+    greeting: { energy: 2, creativity: 0.02, social: 0.03, inventionPoints: 1 },
+    encouragement: { energy: 5, creativity: 0.03, social: 0.02, inventionPoints: 2 },
+    existential: { energy: 1, creativity: 0.05, social: 0.01, inventionPoints: 3 },
+    guidance: { energy: 3, creativity: 0.02, social: 0.02, inventionPoints: 2 },
+    question: { energy: 1, creativity: 0.04, social: 0.02, inventionPoints: 2 },
+    general: { energy: 2, creativity: 0.02, social: 0.02, inventionPoints: 1 },
+  };
+  
+  const boost = baseBoosts[responseType];
+  
+  return {
+    energyBoost: boost.energy,
+    creativityBoost: boost.creativity,
+    socialBoost: boost.social,
+    inventionPointBoost: boost.inventionPoints,
+  };
+}
+
+/**
+ * Apply effects of user communication to an agent
+ */
+export function applyUserMessageEffects(
+  agent: Agent,
+  userMessageContent: string
+): Agent {
+  const responseType = analyzeUserMessage(userMessageContent);
+  const effects = getUserMessageEffect(agent, responseType);
+  
+  return {
+    ...agent,
+    energy: agent.energy + effects.energyBoost,
+    inventionPoints: agent.inventionPoints + effects.inventionPointBoost,
+    genes: {
+      ...agent.genes,
+      creativity: Math.min(1, agent.genes.creativity + effects.creativityBoost),
+      social: Math.min(1, agent.genes.social + effects.socialBoost),
     },
   };
 }
@@ -266,6 +457,8 @@ export function initializeCommunicationLog(): CommunicationLog {
     messages: [],
     activeAgents: new Set(),
     totalMessages: 0,
+    userMessages: [],
+    pendingResponses: new Map(),
   };
 }
 
@@ -338,6 +531,8 @@ export function getMessageTypeLabel(type: MessageType): string {
     case MessageType.DISCOVERY: return '💡 Discovery';
     case MessageType.REFLECTION: return '🪞 Reflection';
     case MessageType.GREETING: return '👋 Awakening';
+    case MessageType.USER_MESSAGE: return '👤 Creator';
+    case MessageType.AGENT_RESPONSE: return '💬 Response';
     default: return '💭 Thought';
   }
 }
@@ -354,6 +549,8 @@ export function getMessageTypeEmoji(type: MessageType): string {
     case MessageType.DISCOVERY: return '💡';
     case MessageType.REFLECTION: return '🪞';
     case MessageType.GREETING: return '👋';
+    case MessageType.USER_MESSAGE: return '👤';
+    case MessageType.AGENT_RESPONSE: return '💬';
     default: return '💭';
   }
 }

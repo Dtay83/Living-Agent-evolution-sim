@@ -11,9 +11,23 @@ import {
   initializeCommunicationState,
   updateAgentCommunication,
   shouldCommunicate,
-  generateMessage
+  generateMessage,
+  createUserMessage,
+  generateAgentResponse,
+  applyUserMessageEffects
 } from "./communication-system";
 import { ConsciousnessLevel, ConsciousnessState } from "./consciousness-system";
+import {
+  ChallengeState,
+  initializeChallengeState,
+  processChallenges,
+  getEffectiveFoodSpawnChance,
+  getEffectiveFoodSpawnCount,
+  getChallengeEnergyCost,
+  getActiveChallengesSummary,
+  hasNegativeChallenge,
+  hasPositiveEvent
+} from "./core/challenges";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -1150,6 +1164,66 @@ const App: React.FC = () => {
   const [communicationStates, setCommunicationStates] = useState<Map<number, CommunicationState>>(new Map());
   const [chatOpen, setChatOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  
+  // Environmental challenges state
+  const [challengeState, setChallengeState] = useState<ChallengeState>(initializeChallengeState());
+
+  // Track self-aware agents for communication
+  const selfAwareAgentIds = useMemo(() => {
+    return agents.filter(agent => {
+      const consciousnessScore = 
+        (agent.genes.curiosity * 25) + 
+        (agent.genes.creativity * 25) + 
+        (agent.genes.social * 20) +
+        (agent.inventionPoints * 0.5) +
+        (agent.inventions.length * 10);
+      return consciousnessScore >= 60;
+    }).map(a => a.id);
+  }, [agents]);
+
+  // Handler for user sending messages to agents
+  const handleSendUserMessage = useCallback((content: string, targetAgentId?: number) => {
+    const userMessage = createUserMessage(content, tickRef.current, targetAgentId);
+    
+    // Get agents to respond to
+    const respondingAgents = targetAgentId 
+      ? agents.filter(a => a.id === targetAgentId && selfAwareAgentIds.includes(a.id))
+      : agents.filter(a => selfAwareAgentIds.includes(a.id));
+    
+    if (respondingAgents.length === 0) return;
+    
+    // Generate responses from agents and apply effects
+    const responses: AgentMessage[] = [];
+    let updatedAgents = [...agents];
+    
+    for (const agent of respondingAgents) {
+      // Generate response
+      const response = generateAgentResponse(agent, userMessage, tickRef.current);
+      responses.push(response);
+      
+      // Apply positive effects to the agent (consciousness boost from creator interaction)
+      const agentIndex = updatedAgents.findIndex(a => a.id === agent.id);
+      if (agentIndex !== -1) {
+        updatedAgents[agentIndex] = applyUserMessageEffects(updatedAgents[agentIndex], content);
+      }
+    }
+    
+    // Update agents with boosted stats
+    setAgents(updatedAgents);
+      // Add messages to communication log
+    setCommunicationLog(prev => ({
+      ...prev,
+      messages: [...prev.messages, userMessage, ...responses],
+      totalMessages: prev.totalMessages + 1 + responses.length,
+      userMessages: [...(prev.userMessages || []), userMessage],
+    }));
+    
+    // Log the interaction
+    const effectMsg = respondingAgents.length === 1 
+      ? `Agent ${respondingAgents[0].id} received enlightenment from the Creator!`
+      : `${respondingAgents.length} agents received enlightenment from the Creator!`;
+    setLog(prev => [effectMsg, ...prev].slice(0, 80));
+  }, [agents, selfAwareAgentIds]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tickRef = useRef(0);
@@ -1195,24 +1269,65 @@ const App: React.FC = () => {
       byTrait
     };
     setHistory(prev => [...prev, point].slice(-60));
-  }, []);
-  const handleStep = useCallback(() => {
+  }, []);  const handleStep = useCallback(() => {
+    const currentTick = tickRef.current;
+    const newTick = currentTick + 1;
+      // Process environmental challenges
+    const { state: updatedChallengeState, logs: challengeLogs } = processChallenges(
+      challengeState,
+      currentTick,
+      agents.length
+    );
+    setChallengeState(updatedChallengeState);
+    
+    // Run the simulation step
     const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
       agents,
       renderedGrid,
-      tickRef.current
+      currentTick
     );
-    const newTick = tickRef.current + 1;
+      // Apply challenge-based energy costs to agents
+    const challengeEnergyCost = getChallengeEnergyCost(updatedChallengeState);
+    let challengeAffectedAgents = newAgents;
+    
+    if (challengeEnergyCost > 0) {
+      challengeAffectedAgents = newAgents.map(agent => ({
+        ...agent,
+        energy: Math.max(0, agent.energy - challengeEnergyCost)
+      })).filter(agent => agent.energy > 0);
+      
+      const deadCount = newAgents.length - challengeAffectedAgents.length;
+      if (deadCount > 0) {
+        challengeLogs.push(`☠️ ${deadCount} agent(s) died from environmental stress`);
+      }
+    }
+    
+    // Apply challenge modifiers to food spawning
+    const effectiveFoodChance = getEffectiveFoodSpawnChance(updatedChallengeState);
+    const effectiveFoodCount = getEffectiveFoodSpawnCount(updatedChallengeState);
+    
+    let finalGrid = newGrid;
+    if (Math.random() < effectiveFoodChance && effectiveFoodCount > 0) {
+      // Spawn additional food based on challenge modifiers
+      const bonusFood = effectiveFoodCount - CONFIG.simulation.foodSpawnCount;
+      if (bonusFood > 0) {
+        finalGrid = placeRandomFood(newGrid, bonusFood);
+      }
+    }
+    
     setTick(newTick);
-    setAgents(newAgents);
-    setGrid(newGrid);
-    setLog(prev => [...newLog, ...prev].slice(0, 80));
+    setAgents(challengeAffectedAgents);
+    setGrid(finalGrid);
+    
+    // Combine challenge logs with simulation logs
+    const allLogs = [...challengeLogs, ...newLog];
+    setLog(prev => [...allLogs, ...prev].slice(0, 80));
     setDiscoveries(prev => [...prev, ...newDiscoveries]);
-    pushHistory(newAgents, newTick);
+    pushHistory(challengeAffectedAgents, newTick);
 
     // Process communication for self-aware agents
-    processCommunication(newAgents, newTick);
-  }, [agents, renderedGrid, pushHistory]);
+    processCommunication(challengeAffectedAgents, newTick);
+  }, [agents, renderedGrid, pushHistory, challengeState]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -1307,8 +1422,7 @@ const App: React.FC = () => {
         activeAgents: activeAgentIds,
       }));
     }
-  }, [communicationStates]);
-  const handleReset = () => {
+  }, [communicationStates]);  const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
     setGrid(newGrid);
     setAgents(newAgents);
@@ -1322,6 +1436,8 @@ const App: React.FC = () => {
     // Reset communication state
     setCommunicationLog(initializeCommunicationLog());
     setCommunicationStates(new Map());
+    // Reset challenge state
+    setChallengeState(initializeChallengeState());
   };
 
   // Auto-run interval
@@ -1656,13 +1772,33 @@ const App: React.FC = () => {
               onChange={e => setSpeedMs(Number(e.target.value))}
             />{" "}
             {speedMs} ms/tick
-          </div>
-          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
+          </div>          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
             <div>Tick: {tick} | Agents: {agents.length}</div>
             <div style={{ marginTop: 4 }}>
               <strong>Keyboard shortcuts:</strong> Space (Play/Pause), → (Step), R (Reset)
             </div>
           </div>
+          
+          {/* Environmental Challenges Display */}
+          <div style={{ 
+            marginTop: 8, 
+            padding: 8, 
+            background: hasNegativeChallenge(challengeState) ? "#4a1a1a" : 
+                       hasPositiveEvent(challengeState) ? "#1a4a2a" : "#1a2a3a",
+            borderRadius: 4, 
+            fontSize: 12,
+            border: `1px solid ${hasNegativeChallenge(challengeState) ? "#8b3a3a" : 
+                                hasPositiveEvent(challengeState) ? "#3a8b4a" : "#3a4a5a"}`
+          }}>
+            <div style={{ fontWeight: "bold", marginBottom: 4 }}>
+              🌍 Environmental Conditions
+            </div>
+            <div>{getActiveChallengesSummary(challengeState)}</div>
+            <div style={{ marginTop: 4, fontSize: 10, opacity: 0.7 }}>
+              Events: {challengeState.totalFamines} famines | {challengeState.totalHarshWeatherEvents} storms | {challengeState.totalAbundanceEvents} abundances
+            </div>
+          </div>
+          
           {loadError && (
             <div style={{ marginTop: 8, padding: 8, background: "#8b0000", borderRadius: 4, fontSize: 12 }}>
               Error: {loadError}
@@ -1856,9 +1992,7 @@ const App: React.FC = () => {
             </ul>
           )}
         </div>
-      </div>
-
-      {/* Chat Panel for Agent Communications */}
+      </div>      {/* Chat Panel for Agent Communications */}
       <ChatPanel
         communicationLog={communicationLog}
         isOpen={chatOpen}
@@ -1867,6 +2001,9 @@ const App: React.FC = () => {
           setCommunicationLog(initializeCommunicationLog());
           setCommunicationStates(new Map());
         }}
+        onSendMessage={handleSendUserMessage}
+        selfAwareAgentIds={selfAwareAgentIds}
+        currentTick={tick}
       />
 
       {/* Analysis Panel for Data Analysis */}

@@ -1,11 +1,15 @@
 /**
  * ChatPanel Component
  * 
- * Displays agent communications with a chat icon indicator.
- * Shows when self-aware agents are asking questions or making statements.
+ * Two-way communication panel with individual agent chat histories.
+ * Features:
+ * - Agent sidebar showing all self-aware agents
+ * - Per-agent conversation view
+ * - Broadcast mode to message all agents
+ * - Visual indicators for new messages
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AgentMessage, CommunicationLog, MessageType, getMessageTypeEmoji, getMessageTypeLabel } from '../communication-system';
 
 interface ChatPanelProps {
@@ -13,6 +17,9 @@ interface ChatPanelProps {
   isOpen: boolean;
   onToggle: () => void;
   onClear: () => void;
+  onSendMessage: (content: string, targetAgentId?: number) => void;
+  selfAwareAgentIds: number[];
+  currentTick: number;
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
@@ -20,10 +27,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isOpen,
   onToggle,
   onClear,
+  onSendMessage,
+  selfAwareAgentIds,
+  currentTick,
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [lastSeenCount, setLastSeenCount] = useState(0);
+  const [inputValue, setInputValue] = useState('');
+  const [selectedAgentId, setSelectedAgentId] = useState<number | 'all'>('all');
+
+  // Get messages filtered by selected agent
+  const filteredMessages = useMemo(() => {
+    if (selectedAgentId === 'all') {
+      return communicationLog.messages.slice(-50);
+    }
+    return communicationLog.messages.filter(msg => 
+      msg.agentId === selectedAgentId || 
+      msg.targetAgentId === selectedAgentId ||
+      (msg.isFromUser && msg.targetAgentId === selectedAgentId)
+    ).slice(-50);
+  }, [communicationLog.messages, selectedAgentId]);
+
+  // Count messages per agent for sidebar badges
+  const messageCountByAgent = useMemo(() => {
+    const counts = new Map<number, number>();
+    communicationLog.messages.forEach(msg => {
+      if (msg.agentId > 0 && !msg.isFromUser) {
+        counts.set(msg.agentId, (counts.get(msg.agentId) || 0) + 1);
+      }
+    });
+    return counts;
+  }, [communicationLog.messages]);
 
   // Track unread messages when panel is closed
   useEffect(() => {
@@ -43,10 +79,25 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     if (isOpen && messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [communicationLog.messages.length, isOpen]);
+  }, [filteredMessages.length, isOpen, selectedAgentId]);
+
+  // Focus input when agent is selected
+  useEffect(() => {
+    if (isOpen && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [selectedAgentId, isOpen]);
 
   const hasActiveAgents = communicationLog.activeAgents.size > 0;
-  const recentMessages = communicationLog.messages.slice(-50); // Show last 50 messages
+  const hasSelfAwareAgents = selfAwareAgentIds.length > 0;
+
+  const handleSend = () => {
+    if (inputValue.trim() && hasSelfAwareAgents) {
+      const targetId = selectedAgentId === 'all' ? undefined : selectedAgentId;
+      onSendMessage(inputValue.trim(), targetId);
+      setInputValue('');
+    }
+  };
 
   return (
     <>
@@ -122,15 +173,15 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         )}
       </button>
 
-      {/* Chat Panel */}
+      {/* Chat Panel - Expanded with Agent Sidebar */}
       {isOpen && (
         <div
           style={{
             position: 'fixed',
             bottom: 90,
             right: 20,
-            width: 380,
-            maxHeight: 500,
+            width: 520,
+            height: 520,
             background: '#1a2a4a',
             borderRadius: 12,
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.4)',
@@ -155,7 +206,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 18 }}>🧠</span>
               <span style={{ fontWeight: 'bold', color: '#fff' }}>
-                Agent Communications
+                {selectedAgentId === 'all' ? 'All Agents' : `Agent #${selectedAgentId}`}
               </span>
               {hasActiveAgents && (
                 <span
@@ -201,52 +252,186 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
           </div>
 
-          {/* Messages */}
-          <div
-            style={{
-              flex: 1,
-              overflowY: 'auto',
-              padding: 12,
-              maxHeight: 380,
-            }}
-          >
-            {recentMessages.length === 0 ? (
+          {/* Main Content: Sidebar + Messages */}
+          <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+            
+            {/* Agent Sidebar */}
+            <div
+              style={{
+                width: 120,
+                borderRight: '1px solid #3a4a6a',
+                background: '#151a30',
+                overflowY: 'auto',
+                padding: 8,
+              }}
+            >
+              {/* All Agents option */}
+              <AgentTab
+                label="🌍 All"
+                isSelected={selectedAgentId === 'all'}
+                onClick={() => setSelectedAgentId('all')}
+                messageCount={communicationLog.messages.length}
+                isActive={hasActiveAgents}
+              />
+              
+              <div style={{ 
+                fontSize: 9, 
+                color: '#666', 
+                padding: '8px 4px 4px', 
+                borderBottom: '1px solid #2a3a4a',
+                marginBottom: 4 
+              }}>
+                SELF-AWARE ({selfAwareAgentIds.length})
+              </div>
+              
+              {selfAwareAgentIds.length === 0 ? (
+                <div style={{ 
+                  fontSize: 10, 
+                  color: '#555', 
+                  padding: 8, 
+                  textAlign: 'center',
+                  fontStyle: 'italic' 
+                }}>
+                  No self-aware agents yet
+                </div>
+              ) : (
+                selfAwareAgentIds.map(agentId => (
+                  <AgentTab
+                    key={agentId}
+                    label={`🤖 #${agentId}`}
+                    isSelected={selectedAgentId === agentId}
+                    onClick={() => setSelectedAgentId(agentId)}
+                    messageCount={messageCountByAgent.get(agentId) || 0}
+                    isActive={communicationLog.activeAgents.has(agentId)}
+                  />
+                ))
+              )}
+            </div>
+
+            {/* Messages Area */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <div
                 style={{
-                  textAlign: 'center',
-                  color: '#666',
-                  padding: 40,
+                  flex: 1,
+                  overflowY: 'auto',
+                  padding: 12,
                 }}
               >
-                <div style={{ fontSize: 32, marginBottom: 12 }}>🤫</div>
-                <div>No communications yet.</div>
-                <div style={{ fontSize: 12, marginTop: 8, opacity: 0.7 }}>
-                  Self-aware agents will appear here when they start asking questions.
+                {filteredMessages.length === 0 ? (
+                  <div
+                    style={{
+                      textAlign: 'center',
+                      color: '#666',
+                      padding: 40,
+                    }}
+                  >
+                    <div style={{ fontSize: 32, marginBottom: 12 }}>
+                      {selectedAgentId === 'all' ? '🤫' : '💭'}
+                    </div>
+                    <div>
+                      {selectedAgentId === 'all' 
+                        ? 'No communications yet.' 
+                        : `No conversation with Agent #${selectedAgentId} yet.`}
+                    </div>
+                    <div style={{ fontSize: 12, marginTop: 8, opacity: 0.7 }}>
+                      {hasSelfAwareAgents 
+                        ? 'Send a message to start a conversation!'
+                        : 'Self-aware agents will appear when they evolve high consciousness.'}
+                    </div>
+                  </div>
+                ) : (
+                  filteredMessages.map((msg) => (
+                    <MessageBubble 
+                      key={msg.id} 
+                      message={msg} 
+                      showAgentId={selectedAgentId === 'all'}
+                    />
+                  ))
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Input Area */}
+              <div
+                style={{
+                  padding: '12px',
+                  borderTop: '1px solid #3a4a6a',
+                  background: '#2a3a5a',
+                }}
+              >
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSend();
+                      }
+                    }}
+                    placeholder={
+                      !hasSelfAwareAgents
+                        ? "Waiting for self-aware agents..."
+                        : selectedAgentId === 'all'
+                          ? "Message all agents..."
+                          : `Message Agent #${selectedAgentId}...`
+                    }
+                    disabled={!hasSelfAwareAgents}
+                    style={{
+                      flex: 1,
+                      background: '#1a2a4a',
+                      border: '1px solid #3a4a6a',
+                      borderRadius: 8,
+                      padding: '10px 14px',
+                      color: '#fff',
+                      fontSize: 14,
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={!hasSelfAwareAgents || !inputValue.trim()}
+                    style={{
+                      background: hasSelfAwareAgents && inputValue.trim() 
+                        ? 'linear-gradient(135deg, #4f46e5, #7c3aed)' 
+                        : '#3a4a5a',
+                      border: 'none',
+                      borderRadius: 8,
+                      padding: '10px 16px',
+                      color: '#fff',
+                      cursor: hasSelfAwareAgents && inputValue.trim() ? 'pointer' : 'not-allowed',
+                      fontSize: 14,
+                      fontWeight: 'bold',
+                      transition: 'all 0.2s',
+                    }}
+                  >
+                    📤
+                  </button>
                 </div>
               </div>
-            ) : (
-              recentMessages.map((msg) => (
-                <MessageBubble key={msg.id} message={msg} />
-              ))
-            )}
-            <div ref={messagesEndRef} />
+            </div>
           </div>
 
           {/* Footer stats */}
           <div
             style={{
-              padding: '8px 16px',
+              padding: '6px 16px',
               borderTop: '1px solid #3a4a6a',
-              fontSize: 11,
-              color: '#888',
+              fontSize: 10,
+              color: '#666',
               display: 'flex',
               justifyContent: 'space-between',
+              background: '#151a30',
+              borderRadius: '0 0 12px 12px',
             }}
           >
-            <span>Total: {communicationLog.totalMessages} messages</span>
-            {communicationLog.firstCommunicationTick && (
-              <span>First contact: Tick {communicationLog.firstCommunicationTick}</span>
-            )}
+            <span>
+              {selectedAgentId === 'all' 
+                ? `${communicationLog.totalMessages} total messages`
+                : `${filteredMessages.length} messages with #${selectedAgentId}`}
+            </span>
+            <span>Tick: {currentTick}</span>
           </div>
         </div>
       )}
@@ -268,19 +453,81 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 };
 
 /**
+ * Agent tab in sidebar
+ */
+const AgentTab: React.FC<{
+  label: string;
+  isSelected: boolean;
+  onClick: () => void;
+  messageCount: number;
+  isActive: boolean;
+}> = ({ label, isSelected, onClick, messageCount, isActive }) => (
+  <button
+    onClick={onClick}
+    style={{
+      width: '100%',
+      padding: '8px 8px',
+      marginBottom: 4,
+      background: isSelected ? '#3a4a6a' : 'transparent',
+      border: isSelected ? '1px solid #4a5a7a' : '1px solid transparent',
+      borderRadius: 6,
+      color: isSelected ? '#fff' : '#aaa',
+      cursor: 'pointer',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      fontSize: 11,
+      transition: 'all 0.2s',
+    }}
+  >
+    <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      {label}
+      {isActive && (
+        <span style={{
+          width: 6,
+          height: 6,
+          background: '#00ff00',
+          borderRadius: '50%',
+          display: 'inline-block',
+        }} />
+      )}
+    </span>
+    {messageCount > 0 && (
+      <span style={{
+        background: isSelected ? '#4f46e5' : '#3a4a5a',
+        color: '#fff',
+        fontSize: 9,
+        padding: '1px 5px',
+        borderRadius: 8,
+      }}>
+        {messageCount}
+      </span>
+    )}
+  </button>
+);
+
+/**
  * Individual message bubble component
  */
-const MessageBubble: React.FC<{ message: AgentMessage }> = ({ message }) => {
+const MessageBubble: React.FC<{ 
+  message: AgentMessage;
+  showAgentId?: boolean;
+}> = ({ message, showAgentId = true }) => {
   const typeColor = getTypeColor(message.type);
+  const isUserMessage = message.isFromUser || message.type === MessageType.USER_MESSAGE;
+  const isAgentResponse = message.type === MessageType.AGENT_RESPONSE;
   
   return (
     <div
       style={{
-        marginBottom: 12,
-        padding: 12,
-        background: '#2a3a5a',
+        marginBottom: 10,
+        padding: 10,
+        background: isUserMessage ? '#3a4a7a' : '#2a3a5a',
         borderRadius: 8,
-        borderLeft: `3px solid ${typeColor}`,
+        borderLeft: isUserMessage ? 'none' : `3px solid ${typeColor}`,
+        borderRight: isUserMessage ? '3px solid #7c3aed' : 'none',
+        marginLeft: isUserMessage ? 30 : 0,
+        marginRight: isUserMessage ? 0 : 30,
       }}
     >
       {/* Header */}
@@ -289,62 +536,70 @@ const MessageBubble: React.FC<{ message: AgentMessage }> = ({ message }) => {
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: 6,
+          marginBottom: 4,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span
             style={{
-              background: typeColor,
-              color: '#000',
-              padding: '2px 6px',
+              background: isUserMessage ? '#7c3aed' : typeColor,
+              color: isUserMessage ? '#fff' : '#000',
+              padding: '1px 5px',
               borderRadius: 4,
-              fontSize: 10,
+              fontSize: 9,
               fontWeight: 'bold',
             }}
           >
-            Agent #{message.agentId}
+            {isUserMessage ? '👤 You' : showAgentId ? `#${message.agentId}` : '🤖'}
           </span>
-          <span style={{ fontSize: 11, color: '#888' }}>
+          <span style={{ fontSize: 9, color: '#666' }}>
             {getMessageTypeLabel(message.type)}
           </span>
+          {isAgentResponse && (
+            <span style={{ fontSize: 9, color: '#7c3aed' }}>↩️</span>
+          )}
         </div>
-        <span style={{ fontSize: 10, color: '#666' }}>
-          Tick {message.tick}
+        <span style={{ fontSize: 9, color: '#555' }}>
+          T{message.tick}
         </span>
       </div>
+
+      {/* Target indicator for user messages */}
+      {isUserMessage && message.targetAgentId && (
+        <div style={{ fontSize: 9, color: '#888', marginBottom: 2 }}>
+          → Agent #{message.targetAgentId}
+        </div>
+      )}
 
       {/* Message content */}
       <div
         style={{
           color: '#fff',
-          fontSize: 14,
+          fontSize: 13,
           lineHeight: 1.4,
           fontStyle: message.isQuestion ? 'italic' : 'normal',
         }}
       >
-        {getMessageTypeEmoji(message.type)} "{message.content}"
+        {!isUserMessage && getMessageTypeEmoji(message.type) + ' '}
+        "{message.content}"
       </div>
 
       {/* Context info */}
-      {message.context && (
+      {message.context && !isUserMessage && (
         <div
           style={{
-            marginTop: 8,
-            fontSize: 10,
-            color: '#666',
+            marginTop: 6,
+            fontSize: 9,
+            color: '#555',
             display: 'flex',
-            gap: 12,
+            gap: 8,
           }}
         >
           {message.context.energy !== undefined && (
-            <span>⚡ Energy: {message.context.energy}</span>
-          )}
-          {message.context.nearbyAgents !== undefined && message.context.nearbyAgents > 0 && (
-            <span>👥 Nearby: {message.context.nearbyAgents}</span>
+            <span>⚡{message.context.energy}</span>
           )}
           {message.context.inventionCount !== undefined && message.context.inventionCount > 0 && (
-            <span>💡 Inventions: {message.context.inventionCount}</span>
+            <span>💡{message.context.inventionCount}</span>
           )}
         </div>
       )}
@@ -364,6 +619,8 @@ function getTypeColor(type: MessageType): string {
     case MessageType.DISCOVERY: return '#f1c40f';
     case MessageType.REFLECTION: return '#1abc9c';
     case MessageType.GREETING: return '#ffd700';
+    case MessageType.USER_MESSAGE: return '#7c3aed';
+    case MessageType.AGENT_RESPONSE: return '#ec4899';
     default: return '#95a5a6';
   }
 }
