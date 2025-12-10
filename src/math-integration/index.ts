@@ -10,7 +10,7 @@
 
 import type { Agent } from '../types';
 import type { MathConcept } from '../science-system/mathematics';
-import { MATH_CONCEPTS, calculateMathBonuses } from '../science-system/mathematics';
+import { MATH_CONCEPTS, calculateMathBonuses, generateAdvancedMathConcept, getAllMathConcepts } from '../science-system/mathematics';
 
 /**
  * Mathematics state tracked for the civilization
@@ -38,12 +38,15 @@ export function initializeCivilizationMath(): CivilizationMath {
 
 /**
  * Get mathematics bonuses for agent behavior
+ * NO CAPS - bonuses grow infinitely with discoveries
  */
 export function getAgentMathBonuses(unlockedMath: MathConcept[]): {
   decisionQuality: number;
   explorationBonus: number;
   patternRecognition: number;
   optimizationPower: number;
+  computationalSpeed: number;
+  abstractionLevel: number;
 } {
   return calculateMathBonuses(unlockedMath);
 }
@@ -167,13 +170,15 @@ export function getResourceOptimizationBonus(unlockedMath: MathConcept[]): numbe
 
 /**
  * Check if an agent discovers a math concept this tick
+ * UNLIMITED EVOLUTION - procedurally generates new concepts when base set exhausted
  */
 export function checkMathDiscovery(
   agent: Agent,
   nearbyAgents: Agent[],
   unlockedMath: MathConcept[],
-  tick: number
-): { concept: MathConcept | null; log: string | null } {
+  tick: number,
+  generatedMathLevel: number = 0
+): { concept: MathConcept | null; log: string | null; nextGeneratedLevel?: number } {
   // Need cognitive surplus (energy > 8) to think about math
   if (agent.energy < 8) {
     return { concept: null, log: null };
@@ -181,15 +186,33 @@ export function checkMathDiscovery(
 
   // Find discoverable concepts (prerequisites met, not already unlocked)
   const unlockedIds = new Set(unlockedMath.map(m => m.id));
-  const discoverableConcepts = MATH_CONCEPTS.filter(concept => {
+  let discoverableConcepts = MATH_CONCEPTS.filter(concept => {
     if (unlockedIds.has(concept.id)) return false;
     return concept.prerequisiteIds.every(id => unlockedIds.has(id) || id === '');
   });
 
   // Include concepts with empty prerequisites for initial discoveries
-  const availableConcepts = discoverableConcepts.length > 0
+  let availableConcepts = discoverableConcepts.length > 0
     ? discoverableConcepts
     : MATH_CONCEPTS.filter(c => c.prerequisiteIds.length === 0 && !unlockedIds.has(c.id));
+
+  // UNLIMITED EVOLUTION: If all base concepts discovered, generate procedural ones
+  let nextGeneratedLevel = generatedMathLevel;
+  if (availableConcepts.length === 0) {
+    // Check if last concept in chain is unlocked to allow next procedural
+    const lastConceptId = generatedMathLevel > 0 
+      ? `advanced_math_${generatedMathLevel - 1}` 
+      : 'hypercomputation';
+    
+    if (unlockedIds.has(lastConceptId)) {
+      // Generate next procedural concept
+      const proceduralConcept = generateAdvancedMathConcept(generatedMathLevel);
+      availableConcepts = [proceduralConcept];
+      nextGeneratedLevel = generatedMathLevel + 1;
+    } else {
+      return { concept: null, log: null };
+    }
+  }
 
   if (availableConcepts.length === 0) {
     return { concept: null, log: null };
@@ -226,14 +249,14 @@ export function checkMathDiscovery(
     discoveredAt: tick,
     discoveredBy: agent.id
   };
-
   // Generate log message
   const collabMsg = nearbyAgents.length > 0
     ? ` (studied with ${nearbyAgents.length} nearby agent${nearbyAgents.length > 1 ? 's' : ''}!)`
     : '';
-  const log = `📐 Agent ${agent.id} discovered math concept: ${concept.name}!${collabMsg}`;
+  const proceduralMsg = concept.id.startsWith('advanced_math_') ? ' 🌟 TRANSCENDENT DISCOVERY!' : '';
+  const log = `📐 Agent ${agent.id} discovered math concept: ${concept.name}!${collabMsg}${proceduralMsg}`;
 
-  return { concept: discoveredConcept, log };
+  return { concept: discoveredConcept, log, nextGeneratedLevel };
 }
 
 /**
@@ -247,16 +270,24 @@ export function getMathExplorationBonus(unlockedMath: MathConcept[]): number {
 
 /**
  * Summarize math state for UI display
+ * Shows all bonuses including new computational and abstraction bonuses
  */
 export function getMathSummary(unlockedMath: MathConcept[]): {
   totalConcepts: number;
   byCategory: Record<string, number>;
   topBonuses: { name: string; value: string }[];
+  proceduralLevel: number;
 } {
   const byCategory: Record<string, number> = {};
+  let proceduralLevel = 0;
 
   for (const concept of unlockedMath) {
     byCategory[concept.category] = (byCategory[concept.category] || 0) + 1;
+    // Track procedural concepts
+    if (concept.id.startsWith('advanced_math_')) {
+      const level = parseInt(concept.id.replace('advanced_math_', ''));
+      proceduralLevel = Math.max(proceduralLevel, level + 1);
+    }
   }
 
   const bonuses = calculateMathBonuses(unlockedMath);
@@ -286,10 +317,24 @@ export function getMathSummary(unlockedMath: MathConcept[]): {
       value: `+${(bonuses.explorationBonus * 100).toFixed(0)}%`
     });
   }
+  // NEW BONUSES - NO CAPS
+  if (bonuses.computationalSpeed > 1) {
+    topBonuses.push({
+      name: 'Computational Speed',
+      value: `${Math.round((bonuses.computationalSpeed - 1) * 100)}% faster`
+    });
+  }
+  if (bonuses.abstractionLevel > 1) {
+    topBonuses.push({
+      name: 'Abstraction Level',
+      value: `${Math.round((bonuses.abstractionLevel - 1) * 100)}% higher`
+    });
+  }
 
   return {
     totalConcepts: unlockedMath.length,
     byCategory,
-    topBonuses
+    topBonuses,
+    proceduralLevel
   };
 }

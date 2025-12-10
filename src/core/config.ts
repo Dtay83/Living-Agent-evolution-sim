@@ -7,7 +7,7 @@ export const CONFIG = {
   grid: {
     initialWidth: 16,
     initialHeight: 10,
-    maxWidth: 50,         // Maximum grid width before performance issues
+    maxWidth: 27,         // Maximum grid width before performance issues
     maxHeight: 30,        // Maximum grid height
     expandBy: 2,          // Number of cells to add when expanding
   },

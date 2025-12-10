@@ -19,7 +19,13 @@ const CATEGORY_ICONS: Record<string, string> = {
   electromagnetism: '⚡',
   quantum: '🔮',
   relativity: '🌌',
-  unified: '🌟'
+  unified: '🌟',
+  cosmology: '🪐',
+  particle: '⚛️',
+  plasma: '☀️',
+  condensed_matter: '💎',
+  exotic: '🌀',
+  transcendent: '✨'
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -28,7 +34,13 @@ const CATEGORY_COLORS: Record<string, string> = {
   electromagnetism: '#ffeb3b',
   quantum: '#9c27b0',
   relativity: '#2196f3',
-  unified: '#e91e63'
+  unified: '#e91e63',
+  cosmology: '#673ab7',
+  particle: '#00bcd4',
+  plasma: '#ff9800',
+  condensed_matter: '#795548',
+  exotic: '#00e676',
+  transcendent: '#d500f9'
 };
 
 export const PhysicsPanel: React.FC<PhysicsPanelProps> = ({
@@ -53,8 +65,7 @@ export const PhysicsPanel: React.FC<PhysicsPanelProps> = ({
       border: '1px solid #333'
     }}>
       <h3>⚛️ Physics Discoveries</h3>
-      
-      {/* Overview Stats */}
+        {/* Overview Stats */}
       <div style={{ 
         display: 'flex', 
         gap: '16px', 
@@ -64,6 +75,11 @@ export const PhysicsPanel: React.FC<PhysicsPanelProps> = ({
         <div>
           <strong>Total Concepts:</strong> {summary.totalConcepts}
         </div>
+        {summary.proceduralLevel > 0 && (
+          <div style={{ color: '#d500f9' }}>
+            <strong>🌟 Transcendent Level:</strong> {summary.proceduralLevel}
+          </div>
+        )}
         {ticksSinceDiscovery >= 0 && (
           <div style={{ opacity: 0.8 }}>
             Last discovery: {ticksSinceDiscovery} ticks ago

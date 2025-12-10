@@ -170,8 +170,12 @@ interface WorldState {
  */
 const CONFIG = {
   grid: {
-    width: 16,
-    height: 10,
+    initialWidth: 16,
+    initialHeight: 10,
+    maxWidth: 27,              // Maximum grid width
+    maxHeight: 30,             // Maximum grid height
+    expandBy: 2,               // Number of cells to add when expanding
+    expandThreshold: 0.6,      // Expand when this % of cells are occupied
   },
   simulation: {
     initialAgents: 6,
@@ -220,9 +224,9 @@ const CONFIG = {
   },
 } as const;
 
-// Backwards compatibility aliases
-const GRID_WIDTH = CONFIG.grid.width;
-const GRID_HEIGHT = CONFIG.grid.height;
+// Backwards compatibility aliases - these are now dynamic and managed by state
+let GRID_WIDTH: number = CONFIG.grid.initialWidth;
+let GRID_HEIGHT: number = CONFIG.grid.initialHeight;
 const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
 const INITIAL_FOOD = CONFIG.simulation.initialFood;
 const ALPHA = CONFIG.rl.alpha;
@@ -369,6 +373,119 @@ function placeRandomFood(grid: Cell[][], count: number): Cell[][] {
     }
   }
   return copy;
+}
+
+/**
+ * DYNAMIC GRID EXPANSION SYSTEM
+ * 
+ * Expands the grid when population density exceeds threshold.
+ * This allows the civilization to grow beyond the initial world size.
+ * Maximum size: 27x30 (810 cells)
+ */
+
+/**
+ * Check if the grid should expand based on population density
+ */
+function shouldExpandGrid(
+  grid: Cell[][],
+  agentCount: number,
+  currentWidth: number,
+  currentHeight: number
+): boolean {
+  // Don't expand if already at max size
+  if (currentWidth >= CONFIG.grid.maxWidth && currentHeight >= CONFIG.grid.maxHeight) {
+    return false;
+  }
+  
+  const totalCells = currentWidth * currentHeight;
+  const occupancyRate = agentCount / totalCells;
+  
+  return occupancyRate >= CONFIG.grid.expandThreshold;
+}
+
+/**
+ * Expand the grid by adding cells to the edges
+ * Returns the new grid and updated dimensions
+ */
+function expandGrid(
+  grid: Cell[][],
+  agents: Agent[],
+  currentWidth: number,
+  currentHeight: number
+): { 
+  grid: Cell[][]; 
+  width: number; 
+  height: number; 
+  expanded: boolean;
+  log: string | null;
+} {
+  const expandBy = CONFIG.grid.expandBy;
+  
+  // Calculate new dimensions (respecting max limits)
+  let newWidth = Math.min(CONFIG.grid.maxWidth, currentWidth + expandBy);
+  let newHeight = Math.min(CONFIG.grid.maxHeight, currentHeight + expandBy);
+  
+  // Check if any expansion is possible
+  if (newWidth === currentWidth && newHeight === currentHeight) {
+    return { grid, width: currentWidth, height: currentHeight, expanded: false, log: null };
+  }
+  
+  // Create new expanded grid
+  const newGrid: Cell[][] = [];
+  
+  for (let y = 0; y < newHeight; y++) {
+    const row: Cell[] = [];
+    for (let x = 0; x < newWidth; x++) {
+      if (y < currentHeight && x < currentWidth) {
+        // Copy existing cell
+        row.push({ ...grid[y][x] });
+      } else {
+        // New cell - empty
+        row.push({ food: false });
+      }
+    }
+    newGrid.push(row);
+  }
+  
+  // Spawn some food in the new areas to make expansion worthwhile
+  const newCells = (newWidth * newHeight) - (currentWidth * currentHeight);
+  const foodToAdd = Math.floor(newCells * 0.15); // 15% of new cells get food
+  
+  let foodAdded = 0;
+  let attempts = 0;
+  while (foodAdded < foodToAdd && attempts < 100) {
+    attempts++;
+    // Prefer new areas for food placement
+    const x = Math.random() < 0.7 
+      ? currentWidth + randomInt(newWidth - currentWidth) 
+      : randomInt(newWidth);
+    const y = Math.random() < 0.7 
+      ? currentHeight + randomInt(newHeight - currentHeight) 
+      : randomInt(newHeight);
+    
+    if (x < newWidth && y < newHeight && !newGrid[y][x].food && newGrid[y][x].agentId === undefined) {
+      newGrid[y][x].food = true;
+      foodAdded++;
+    }
+  }
+  
+  const log = `🌍 WORLD EXPANDED! Grid grew from ${currentWidth}×${currentHeight} to ${newWidth}×${newHeight}. +${foodAdded} food in new territory.`;
+  
+  return { 
+    grid: newGrid, 
+    width: newWidth, 
+    height: newHeight, 
+    expanded: true,
+    log 
+  };
+}
+
+/**
+ * Update global grid dimensions (used by other functions)
+ */
+function updateGridDimensions(width: number, height: number) {
+  GRID_WIDTH = width;
+  GRID_HEIGHT = height;
 }
 
 function randomTraitId(): number {
@@ -858,13 +975,19 @@ function getReproductionBonus(agent: Agent): number {
  * - Resource optimization from math knowledge
  * - Improved Q-learning from statistical concepts
  * - Math discovery with collaboration bonus
+ * 
+ * UNLIMITED EVOLUTION UPGRADE:
+ * - Procedural concept generation when base concepts exhausted
+ * - No caps on bonuses or discoveries
  */
 function stepWorld(
   agents: Agent[],
   grid: Cell[][],
   tick: number,
   physicsState: CivilizationPhysics,
-  mathState: CivilizationMath
+  mathState: CivilizationMath,
+  generatedPhysicsLevel: number = 0,
+  generatedMathLevel: number = 0
 ): { 
   agents: Agent[]; 
   grid: Cell[][]; 
@@ -872,6 +995,8 @@ function stepWorld(
   discoveries: DiscoveryEvent[];
   physicsDiscoveries: PhysicsConcept[];
   mathDiscoveries: MathConcept[];
+  nextGeneratedPhysicsLevel?: number;
+  nextGeneratedMathLevel?: number;
 } {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
@@ -879,9 +1004,12 @@ function stepWorld(
 
   const logs: string[] = [];
   const updatedAgents: Agent[] = [];
-  const discoveries: DiscoveryEvent[] = [];
-  const physicsDiscoveries: PhysicsConcept[] = []; // Track new physics concepts discovered this tick
+  const discoveries: DiscoveryEvent[] = [];  const physicsDiscoveries: PhysicsConcept[] = []; // Track new physics concepts discovered this tick
   const mathDiscoveries: MathConcept[] = []; // Track new math concepts discovered this tick
+  
+  // Track procedural generation level advances
+  let nextPhysicsLevel = generatedPhysicsLevel;
+  let nextMathLevel = generatedMathLevel;
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -984,18 +1112,22 @@ function stepWorld(
       Math.abs(a.x - finalX) <= 2 &&
       Math.abs(a.y - finalY) <= 2
     );
-    
-    const physicsResult = checkPhysicsDiscovery(
+      const physicsResult = checkPhysicsDiscovery(
       parentAgent,
       nearbyAgentsForPhysics,
       physicsState.unlockedConcepts,
-      tick
+      tick,
+      nextPhysicsLevel
     );
     
     if (physicsResult.concept) {
       physicsDiscoveries.push(physicsResult.concept);
       if (physicsResult.log) {
         logs.push(physicsResult.log);
+      }
+      // Update procedural level if advanced
+      if (physicsResult.nextGeneratedLevel !== undefined) {
+        nextPhysicsLevel = physicsResult.nextGeneratedLevel;
       }
     }
 
@@ -1004,13 +1136,18 @@ function stepWorld(
       parentAgent,
       nearbyAgentsForPhysics, // Same nearby agents for collaboration
       mathState.unlockedConcepts,
-      tick
+      tick,
+      nextMathLevel
     );
     
     if (mathResult.concept) {
       mathDiscoveries.push(mathResult.concept);
       if (mathResult.log) {
         logs.push(mathResult.log);
+      }
+      // Update procedural level if advanced
+      if (mathResult.nextGeneratedLevel !== undefined) {
+        nextMathLevel = mathResult.nextGeneratedLevel;
       }
     }
 
@@ -1161,10 +1298,28 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, physicsDiscoveries, mathDiscoveries };
+    return { 
+      agents: updatedAgents, 
+      grid: gridWithFood, 
+      log: logs, 
+      discoveries, 
+      physicsDiscoveries, 
+      mathDiscoveries,
+      nextGeneratedPhysicsLevel: nextPhysicsLevel,
+      nextGeneratedMathLevel: nextMathLevel
+    };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, physicsDiscoveries, mathDiscoveries };
+  return { 
+    agents: updatedAgents, 
+    grid: newGrid, 
+    log: logs, 
+    discoveries, 
+    physicsDiscoveries, 
+    mathDiscoveries,
+    nextGeneratedPhysicsLevel: nextPhysicsLevel,
+    nextGeneratedMathLevel: nextMathLevel
+  };
 }
 
 /**
@@ -1390,6 +1545,10 @@ const App: React.FC = () => {
   const [grid, setGrid] = useState<Cell[][]>(initialWorld.grid);
   const [agents, setAgents] = useState<Agent[]>(initialWorld.agents);
 
+  // Dynamic grid dimensions state
+  const [gridWidth, setGridWidth] = useState<number>(CONFIG.grid.initialWidth);
+  const [gridHeight, setGridHeight] = useState<number>(CONFIG.grid.initialHeight);
+
   const [log, setLog] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<number | null>(null);
   const [tick, setTick] = useState(0);
@@ -1411,9 +1570,12 @@ const App: React.FC = () => {
 
   // Physics integration state
   const [physicsState, setPhysicsState] = useState<CivilizationPhysics>(initializeCivilizationPhysics());
-
   // Mathematics integration state
   const [mathState, setMathState] = useState<CivilizationMath>(initializeCivilizationMath());
+
+  // Procedural generation levels for unlimited evolution
+  const [generatedMathLevel, setGeneratedMathLevel] = useState<number>(0);
+  const [generatedPhysicsLevel, setGeneratedPhysicsLevel] = useState<number>(0);
 
   // Era progression state
   const [eraState, setEraState] = useState<CivilizationEraState>(initializeCivilizationEra());
@@ -1536,22 +1698,33 @@ const App: React.FC = () => {
       agents.length
     );
     setChallengeState(updatedChallengeState);
-    
-    // Run the simulation step with physics and math integration
+      // Run the simulation step with physics and math integration
     const { 
       agents: newAgents, 
       grid: newGrid, 
       log: newLog, 
       discoveries: newDiscoveries,
       physicsDiscoveries: newPhysicsDiscoveries,
-      mathDiscoveries: newMathDiscoveries
+      mathDiscoveries: newMathDiscoveries,
+      nextGeneratedPhysicsLevel,
+      nextGeneratedMathLevel
     } = stepWorld(
       agents,
       renderedGrid,
       currentTick,
       physicsState,
-      mathState
+      mathState,
+      generatedPhysicsLevel,
+      generatedMathLevel
     );
+    
+    // Update procedural generation levels for unlimited evolution
+    if (nextGeneratedPhysicsLevel !== undefined && nextGeneratedPhysicsLevel > generatedPhysicsLevel) {
+      setGeneratedPhysicsLevel(nextGeneratedPhysicsLevel);
+    }
+    if (nextGeneratedMathLevel !== undefined && nextGeneratedMathLevel > generatedMathLevel) {
+      setGeneratedMathLevel(nextGeneratedMathLevel);
+    }
     
     // Update physics state with any new discoveries
     if (newPhysicsDiscoveries.length > 0) {
@@ -1815,6 +1988,34 @@ const App: React.FC = () => {
       }
     }
     
+    // ========================================
+    // DYNAMIC GRID EXPANSION
+    // ========================================
+    let currentGridWidth = gridWidth;
+    let currentGridHeight = gridHeight;
+    
+    // Check if grid should expand based on population density
+    if (shouldExpandGrid(finalGrid, challengeAffectedAgents.length, currentGridWidth, currentGridHeight)) {
+      const expansion = expandGrid(finalGrid, challengeAffectedAgents, currentGridWidth, currentGridHeight);
+      
+      if (expansion.expanded) {
+        finalGrid = expansion.grid;
+        currentGridWidth = expansion.width;
+        currentGridHeight = expansion.height;
+        
+        // Update global dimensions for other functions
+        updateGridDimensions(currentGridWidth, currentGridHeight);
+        
+        // Update state
+        setGridWidth(currentGridWidth);
+        setGridHeight(currentGridHeight);
+        
+        if (expansion.log) {
+          challengeLogs.push(expansion.log);
+        }
+      }
+    }
+    
     setTick(newTick);
     setAgents(challengeAffectedAgents);
     setGrid(finalGrid);
@@ -1827,7 +2028,7 @@ const App: React.FC = () => {
 
     // Process communication for self-aware agents
     processCommunication(challengeAffectedAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages]);
+  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages, gridWidth, gridHeight]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -1924,6 +2125,12 @@ const App: React.FC = () => {
   }, [communicationStates]);
 
   const handleReset = () => {
+    // Reset grid dimensions to initial values
+    GRID_WIDTH = CONFIG.grid.initialWidth;
+    GRID_HEIGHT = CONFIG.grid.initialHeight;
+    setGridWidth(CONFIG.grid.initialWidth);
+    setGridHeight(CONFIG.grid.initialHeight);
+    
     const { grid: newGrid, agents: newAgents } = initializeWorld();
     setGrid(newGrid);
     setAgents(newAgents);
@@ -1938,11 +2145,20 @@ const App: React.FC = () => {
     setCommunicationLog(initializeCommunicationLog());
     setCommunicationStates(new Map());
     // Reset challenge state
-    setChallengeState(initializeChallengeState());
-    // Reset physics state
+    setChallengeState(initializeChallengeState());    // Reset physics state
     setPhysicsState(initializeCivilizationPhysics());
     // Reset math state
     setMathState(initializeCivilizationMath());
+    // Reset procedural generation levels for unlimited evolution
+    setGeneratedPhysicsLevel(0);
+    setGeneratedMathLevel(0);
+    // Reset era state
+    setEraState(initializeCivilizationEra());
+    // Reset speech state
+    setSpeechState(initializeCivilizationSpeech());
+    setAgentLanguages(new Map());
+    // Reset collaborative discoveries
+    setCollaborativeDiscoveries(0);
   };
 
   // Auto-run interval
@@ -2278,7 +2494,11 @@ const App: React.FC = () => {
             />{" "}
             {speedMs} ms/tick
           </div>          <div style={{ marginTop: 8, fontSize: 12, opacity: 0.8 }}>
-            <div>Tick: {tick} | Agents: {agents.length}</div>
+            <div>Tick: {tick} | Agents: {agents.length} | Grid: {gridWidth}×{gridHeight}
+              {gridWidth >= CONFIG.grid.maxWidth && gridHeight >= CONFIG.grid.maxHeight && (
+                <span style={{ color: '#ffd700' }}> (MAX)</span>
+              )}
+            </div>
             <div style={{ marginTop: 4 }}>
               <strong>Keyboard shortcuts:</strong> Space (Play/Pause), → (Step), R (Reset)
             </div>

@@ -10,7 +10,7 @@
 
 import type { Agent } from '../types';
 import type { PhysicsConcept } from '../science-system/physics';
-import { PHYSICS_CONCEPTS, calculatePhysicsBonuses } from '../science-system/physics';
+import { PHYSICS_CONCEPTS, calculatePhysicsBonuses, generateAdvancedPhysicsConcept, getAllPhysicsConcepts } from '../science-system/physics';
 
 /**
  * Physics state tracked per agent
@@ -131,13 +131,15 @@ export function getCollaborationBonus(
 
 /**
  * Check if an agent discovers a physics concept this tick
+ * UNLIMITED EVOLUTION - procedurally generates new concepts when base set exhausted
  */
 export function checkPhysicsDiscovery(
   agent: Agent,
   nearbyAgents: Agent[],
   unlockedPhysics: PhysicsConcept[],
-  tick: number
-): { concept: PhysicsConcept | null; log: string | null } {
+  tick: number,
+  generatedPhysicsLevel: number = 0
+): { concept: PhysicsConcept | null; log: string | null; nextGeneratedLevel?: number } {
   // Need cognitive surplus (energy > 10) to think about physics
   if (agent.energy < 10) {
     return { concept: null, log: null };
@@ -145,15 +147,33 @@ export function checkPhysicsDiscovery(
   
   // Find discoverable concepts (prerequisites met, not already unlocked)
   const unlockedIds = new Set(unlockedPhysics.map(p => p.id));
-  const discoverableConcepts = PHYSICS_CONCEPTS.filter(concept => {
+  let discoverableConcepts = PHYSICS_CONCEPTS.filter(concept => {
     if (unlockedIds.has(concept.id)) return false;
     return concept.prerequisiteIds.every(id => unlockedIds.has(id) || id === '');
   });
   
   // Include concepts with empty prerequisites for initial discoveries
-  const availableConcepts = discoverableConcepts.length > 0 
+  let availableConcepts = discoverableConcepts.length > 0 
     ? discoverableConcepts 
     : PHYSICS_CONCEPTS.filter(c => c.prerequisiteIds.length === 0 && !unlockedIds.has(c.id));
+  
+  // UNLIMITED EVOLUTION: If all base concepts discovered, generate procedural ones
+  let nextGeneratedLevel = generatedPhysicsLevel;
+  if (availableConcepts.length === 0) {
+    // Check if last concept in chain is unlocked to allow next procedural
+    const lastConceptId = generatedPhysicsLevel > 0 
+      ? `advanced_physics_${generatedPhysicsLevel - 1}` 
+      : 'omega_physics';
+    
+    if (unlockedIds.has(lastConceptId)) {
+      // Generate next procedural concept
+      const proceduralConcept = generateAdvancedPhysicsConcept(generatedPhysicsLevel);
+      availableConcepts = [proceduralConcept];
+      nextGeneratedLevel = generatedPhysicsLevel + 1;
+    } else {
+      return { concept: null, log: null };
+    }
+  }
   
   if (availableConcepts.length === 0) {
     return { concept: null, log: null };
@@ -184,25 +204,28 @@ export function checkPhysicsDiscovery(
     discoveredAt: tick,
     discoveredBy: agent.id
   };
-  
-  // Generate log message
+    // Generate log message
   const collabMsg = nearbyAgents.length > 0 
     ? ` (collaborated with ${nearbyAgents.length} nearby agent${nearbyAgents.length > 1 ? 's' : ''}!)` 
     : '';
-  const log = `🔬 Agent ${agent.id} discovered physics concept: ${concept.name}!${collabMsg}`;
+  const proceduralMsg = concept.id.startsWith('advanced_physics_') ? ' 🌟 TRANSCENDENT DISCOVERY!' : '';
+  const log = `🔬 Agent ${agent.id} discovered physics concept: ${concept.name}!${collabMsg}${proceduralMsg}`;
   
-  return { concept: discoveredConcept, log };
+  return { concept: discoveredConcept, log, nextGeneratedLevel };
 }
 
 /**
  * Get physics bonuses that affect agent actions
  * Returns multipliers/bonuses to apply to various agent capabilities
+ * NO CAPS - bonuses grow infinitely with discoveries
  */
 export function getAgentPhysicsBonuses(unlockedPhysics: PhysicsConcept[]): {
   energyEfficiency: number;
   movementSpeed: number;
   learningRate: number;
   inventionChance: number;
+  spaceManipulation: number;
+  timePerception: number;
 } {
   return calculatePhysicsBonuses(unlockedPhysics);
 }
@@ -228,16 +251,24 @@ export function getPhysicsInventionBonus(unlockedPhysics: PhysicsConcept[]): num
 
 /**
  * Summarize physics state for UI display
+ * Shows all bonuses including new space manipulation and time perception
  */
 export function getPhysicsSummary(unlockedPhysics: PhysicsConcept[]): {
   totalConcepts: number;
   byCategory: Record<string, number>;
   topBonuses: { name: string; value: string }[];
+  proceduralLevel: number;
 } {
   const byCategory: Record<string, number> = {};
+  let proceduralLevel = 0;
   
   for (const concept of unlockedPhysics) {
     byCategory[concept.category] = (byCategory[concept.category] || 0) + 1;
+    // Track procedural concepts
+    if (concept.id.startsWith('advanced_physics_')) {
+      const level = parseInt(concept.id.replace('advanced_physics_', ''));
+      proceduralLevel = Math.max(proceduralLevel, level + 1);
+    }
   }
   
   const bonuses = calculatePhysicsBonuses(unlockedPhysics);
@@ -267,10 +298,24 @@ export function getPhysicsSummary(unlockedPhysics: PhysicsConcept[]): {
       value: `+${(bonuses.inventionChance * 100).toFixed(1)}%` 
     });
   }
+  // NEW BONUSES - NO CAPS
+  if (bonuses.spaceManipulation > 1) {
+    topBonuses.push({ 
+      name: 'Space Manipulation', 
+      value: `${Math.round((bonuses.spaceManipulation - 1) * 100)}% power` 
+    });
+  }
+  if (bonuses.timePerception > 1) {
+    topBonuses.push({ 
+      name: 'Time Perception', 
+      value: `${Math.round((bonuses.timePerception - 1) * 100)}% enhanced` 
+    });
+  }
   
   return {
     totalConcepts: unlockedPhysics.length,
     byCategory,
-    topBonuses
+    topBonuses,
+    proceduralLevel
   };
 }

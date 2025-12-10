@@ -20,7 +20,12 @@ const CATEGORY_ICONS: Record<string, string> = {
   calculus: '∫',
   statistics: '📊',
   topology: '🔗',
-  abstract: '🎯'
+  abstract: '🎯',
+  number_theory: '🔑',
+  logic: '🧠',
+  optimization: '📈',
+  ai_math: '🤖',
+  transcendent: '✨'
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -30,7 +35,12 @@ const CATEGORY_COLORS: Record<string, string> = {
   calculus: '#9c27b0',
   statistics: '#00bcd4',
   topology: '#e91e63',
-  abstract: '#ffc107'
+  abstract: '#ffc107',
+  number_theory: '#8bc34a',
+  logic: '#3f51b5',
+  optimization: '#ff5722',
+  ai_math: '#00e676',
+  transcendent: '#d500f9'
 };
 
 export const MathPanel: React.FC<MathPanelProps> = ({
@@ -54,9 +64,7 @@ export const MathPanel: React.FC<MathPanelProps> = ({
       borderRadius: '8px',
       border: '1px solid #333'
     }}>
-      <h3>📐 Mathematics Discoveries</h3>
-
-      {/* Overview Stats */}
+      <h3>📐 Mathematics Discoveries</h3>      {/* Overview Stats */}
       <div style={{
         display: 'flex',
         gap: '16px',
@@ -66,6 +74,11 @@ export const MathPanel: React.FC<MathPanelProps> = ({
         <div>
           <strong>Total Concepts:</strong> {summary.totalConcepts}
         </div>
+        {summary.proceduralLevel > 0 && (
+          <div style={{ color: '#d500f9' }}>
+            <strong>🌟 Transcendent Level:</strong> {summary.proceduralLevel}
+          </div>
+        )}
         {ticksSinceDiscovery >= 0 && (
           <div style={{ opacity: 0.8 }}>
             Last discovery: {ticksSinceDiscovery} ticks ago
