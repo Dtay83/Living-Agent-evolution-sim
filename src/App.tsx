@@ -1407,9 +1407,9 @@ const App: React.FC = () => {
 
     // Update states
     setCommunicationStates(newCommStates);
-    
-    if (newMessages.length > 0) {
+      if (newMessages.length > 0) {
       setCommunicationLog(prev => ({
+        ...prev,
         messages: [...prev.messages, ...newMessages].slice(-100),
         activeAgents: activeAgentIds,
         totalMessages: prev.totalMessages + newMessages.length,
@@ -1420,9 +1420,10 @@ const App: React.FC = () => {
       setCommunicationLog(prev => ({
         ...prev,
         activeAgents: activeAgentIds,
-      }));
-    }
-  }, [communicationStates]);  const handleReset = () => {
+      }));    }
+  }, [communicationStates]);
+
+  const handleReset = () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
     setGrid(newGrid);
     setAgents(newAgents);

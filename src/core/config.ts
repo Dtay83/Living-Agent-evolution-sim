@@ -107,8 +107,8 @@ export const CONFIG = {
 } as const;
 
 // Backwards compatibility aliases (now dynamic - will be set by WorldState)
-export let GRID_WIDTH = CONFIG.grid.initialWidth;
-export let GRID_HEIGHT = CONFIG.grid.initialHeight;
+export let GRID_WIDTH: number = CONFIG.grid.initialWidth;
+export let GRID_HEIGHT: number = CONFIG.grid.initialHeight;
 
 /**
  * Update grid dimensions (used when grid expands)

@@ -131,12 +131,11 @@ export function decideMove(
   stateKey: string
 ): MoveDecision {
   const { x, y, energy, genes } = agent;
-
   const neighbors: { x: number; y: number; dir: Direction }[] = [
-    { x, y: y - 1, dir: "up" },
-    { x, y: y + 1, dir: "down" },
-    { x: x - 1, y, dir: "left" },
-    { x: x + 1, y, dir: "right" }
+    { x, y: y - 1, dir: "up" as Direction },
+    { x, y: y + 1, dir: "down" as Direction },
+    { x: x - 1, y, dir: "left" as Direction },
+    { x: x + 1, y, dir: "right" as Direction }
   ].filter(
     p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
   );

@@ -120,24 +120,23 @@ export const ScienceProgressPanel: React.FC<ScienceProgressPanelProps> = ({ scie
             marginBottom: 6
           }}>
             Recent Scientific Discoveries:
-          </div>
-          <div style={{ fontSize: 12 }}>
+          </div>          <div style={{ fontSize: 12 }}>
             {recentDiscoveries.map((discovery, i) => (
               <div 
                 key={i}
                 style={{
                   padding: '4px 8px',
-                  background: discovery.type === 'physics' ? '#1e3a5f' : '#2e1f47',
+                  background: discovery.category === 'physics' ? '#1e3a5f' : '#2e1f47',
                   borderRadius: 4,
                   marginBottom: 4,
-                  borderLeft: `3px solid ${discovery.type === 'physics' ? '#60a5fa' : '#a78bfa'}`
+                  borderLeft: `3px solid ${discovery.category === 'physics' ? '#60a5fa' : '#a78bfa'}`
                 }}
               >
                 <span style={{ color: '#e0e6ed' }}>
                   {discovery.name}
                 </span>
                 <span style={{ color: '#8b99ab', marginLeft: 8 }}>
-                  (Tick {discovery.tick})
+                  (Tick {discovery.discoveredAt})
                 </span>
               </div>
             ))}

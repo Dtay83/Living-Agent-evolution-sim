@@ -10,7 +10,9 @@
  * - Long-term planning (temporal consciousness)
  */
 
-import { Agent, Invention, PhysicsConcept, MathConcept } from '../types';
+import { Agent, Invention } from '../types';
+import type { PhysicsConcept } from '../science-system/physics';
+import type { MathConcept } from '../science-system/mathematics';
 
 /**
  * Consciousness levels ranging from simple reactivity to full self-awareness
@@ -58,10 +60,9 @@ export function calculateConsciousnessIndicators(
   mathematics: MathConcept[]
 ): ConsciousnessIndicator[] {
   const indicators: ConsciousnessIndicator[] = [];
-
   // 1. METACOGNITIVE LEARNING (Learning about learning)
   // High invention points + high Q-table diversity = understands own learning
-  const qTableSize = agent.qTable ? Object.keys(agent.qTable).length : 0;
+  const qTableSize = agent.memory?.qTable ? Object.keys(agent.memory.qTable).length : 0;
   const metacognitionScore = Math.min(1, (
     (agent.inventionPoints / 100) * 0.6 +
     (qTableSize / 50) * 0.4
@@ -120,12 +121,12 @@ export function calculateConsciousnessIndicators(
     weight: 2.5,
     threshold: 0.65,
   });
-
   // 4. TEMPORAL CONSCIOUSNESS (Long-term planning & memory)
-  // High patience + stored energy + consistent survival time
+  // High patience + stored energy + invention history (proxy for survival time)
+  const survivalProxy = Math.min(1, agent.inventions.length / 5); // inventions indicate survival over time
   const temporalScore = Math.min(1, (
     agent.genes.patience * 0.4 +
-    (agent.age > 100 ? 0.4 : agent.age / 250) +
+    survivalProxy * 0.4 +
     (agent.energy > 15 ? 0.2 : 0) // Surplus = planning ahead
   ));
   
@@ -171,14 +172,13 @@ export function calculateConsciousnessIndicators(
     weight: 2.5,
     threshold: 0.7,
   });
-
   // 7. EXISTENTIAL UNDERSTANDING (Awareness of existence itself)
   // Combination of all advanced traits + inventions + science
   const existentialScore = Math.min(1, (
     (agent.inventionPoints / 100) * 0.3 +
     (agent.inventions.length / 10) * 0.3 +
     (scienceLevel / 20) * 0.2 +
-    (agent.age / 200) * 0.2
+    (agent.genes.curiosity * 0.2) // curiosity as proxy for existential questioning
   ));
   
   indicators.push({

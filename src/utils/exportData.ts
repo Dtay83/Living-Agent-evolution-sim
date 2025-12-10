@@ -10,6 +10,8 @@
 
 import type { WorldState, Agent, DiscoveryEvent, HistoryPoint } from '../types';
 import type { ScienceState } from '../science-system';
+import type { PhysicsConcept } from '../science-system/physics';
+import type { MathConcept } from '../science-system/mathematics';
 import type { CommunicationLog, AgentMessage, MessageType } from '../communication-system';
 
 /**
@@ -94,15 +96,14 @@ export function exportInventionHistory(world: WorldState): void {
  */
 export function exportEvolutionData(world: WorldState): void {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
-  
-  // Calculate genetic statistics
+    // Calculate genetic statistics
   const geneStats = {
     foodPreference: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     exploration: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     reproductionThreshold: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     mutationRate: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     curiosity: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
-    social: { min: Number.MAX_VALUE, max: 0, stdDev: 0 },
+    social: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     creativity: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
     patience: { min: Number.MAX_VALUE, max: 0, avg: 0, stdDev: 0 },
   };
@@ -205,27 +206,26 @@ export function exportScienceLogs(world: WorldState): void {
       currentDiscoveries: world.scienceState.totalDiscoveries,
       requiredDiscoveries: world.scienceState.currentEra.minDiscoveries,
       percentComplete: (world.scienceState.totalDiscoveries / world.scienceState.currentEra.minDiscoveries) * 100,
-    },
-    physicsDiscoveries: {
+    },    physicsDiscoveries: {
       total: world.scienceState.physics.length,
-      concepts: world.scienceState.physics.map(p => ({
+      concepts: world.scienceState.physics.map((p: PhysicsConcept) => ({
         id: p.id,
         name: p.name,
         category: p.category,
         complexity: p.complexity,
-        bonuses: p.bonuses,
+        aiBonus: p.aiBonus,
         discoveredAt: p.discoveredAt,
         discoveredBy: p.discoveredBy,
       })),
     },
     mathematicsDiscoveries: {
       total: world.scienceState.mathematics.length,
-      concepts: world.scienceState.mathematics.map(m => ({
+      concepts: world.scienceState.mathematics.map((m: MathConcept) => ({
         id: m.id,
         name: m.name,
         category: m.category,
         complexity: m.complexity,
-        bonuses: m.bonuses,
+        aiBonus: m.aiBonus,
         discoveredAt: m.discoveredAt,
         discoveredBy: m.discoveredBy,
       })),
@@ -235,10 +235,10 @@ export function exportScienceLogs(world: WorldState): void {
       physicsCount: world.scienceState.physics.length,
       mathematicsCount: world.scienceState.mathematics.length,
       averagePhysicsComplexity: world.scienceState.physics.length > 0
-        ? world.scienceState.physics.reduce((sum, p) => sum + p.complexity, 0) / world.scienceState.physics.length
+        ? world.scienceState.physics.reduce((sum: number, p: PhysicsConcept) => sum + p.complexity, 0) / world.scienceState.physics.length
         : 0,
       averageMathComplexity: world.scienceState.mathematics.length > 0
-        ? world.scienceState.mathematics.reduce((sum, m) => sum + m.complexity, 0) / world.scienceState.mathematics.length
+        ? world.scienceState.mathematics.reduce((sum: number, m: MathConcept) => sum + m.complexity, 0) / world.scienceState.mathematics.length
         : 0,
     },
   };
