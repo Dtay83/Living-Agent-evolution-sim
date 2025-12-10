@@ -1,7 +1,7 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
-import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel, SpeechPanel } from "./ui-components";
+import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel, SpeechPanel, ExplanationPanel } from "./ui-components";
 import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
 import { 
   CommunicationLog, 
@@ -2714,14 +2714,21 @@ const App: React.FC = () => {
           physicsCount={physicsState.unlockedConcepts.length}
           mathCount={mathState.unlockedConcepts.length}
           currentTick={tick}
-        />
-
-        {/* Speech & Language */}
+        />        {/* Speech & Language */}
         <SpeechPanel
           speechState={speechState}
           agents={agents}
           agentLanguages={agentLanguages}
           currentTick={tick}
+        />
+
+        {/* Agent Explanations - using math & physics knowledge */}
+        <ExplanationPanel
+          agents={agents}
+          unlockedMath={mathState.unlockedConcepts}
+          unlockedPhysics={physicsState.unlockedConcepts}
+          currentTick={tick}
+          selectedAgentId={selectedAgentId}
         />
 
         {/* Log */}
