@@ -1,7 +1,7 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
-import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel } from "./ui-components";
+import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel, SpeechPanel } from "./ui-components";
 import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
 import { 
   CommunicationLog, 
@@ -61,6 +61,20 @@ import {
   getEraEnergyEfficiency,
   calculateInheritedInventions
 } from "./era-integration";
+import {
+  CivilizationSpeechState,
+  AgentLanguageState,
+  initializeCivilizationSpeech,
+  initializeAgentLanguage,
+  expandVocabulary,
+  getPhysicsVocabulary,
+  getMathVocabulary,
+  canInitiateDialogue,
+  initiateDialogue,
+  continueDialogue,
+  transferKnowledge,
+  updateCommunicationStyle
+} from "./speech-integration";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -1407,6 +1421,10 @@ const App: React.FC = () => {
   // Track collaborative discoveries for milestones
   const [collaborativeDiscoveries, setCollaborativeDiscoveries] = useState<number>(0);
 
+  // Speech and language integration state
+  const [speechState, setSpeechState] = useState<CivilizationSpeechState>(initializeCivilizationSpeech());
+  const [agentLanguages, setAgentLanguages] = useState<Map<number, AgentLanguageState>>(new Map());
+
   // Track self-aware agents for communication
   const selfAwareAgentIds = useMemo(() => {
     return agents.filter(agent => {
@@ -1630,6 +1648,144 @@ const App: React.FC = () => {
       });
     }
     
+    // ========================================
+    // PHASE 4: SPEECH & LANGUAGE INTEGRATION
+    // ========================================
+    
+    // Update agent language states
+    const newAgentLanguages = new Map(agentLanguages);
+    const physicsVocab = getPhysicsVocabulary(physicsState.unlockedConcepts);
+    const mathVocab = getMathVocabulary(mathState.unlockedConcepts);
+    
+    for (const agent of newAgents) {
+      // Initialize language for new agents
+      if (!newAgentLanguages.has(agent.id)) {
+        // Try to find parent's language for inheritance
+        const parentLang = agent.lastRule?.includes('Born') 
+          ? undefined // Could be enhanced to track actual parent
+          : undefined;
+        newAgentLanguages.set(agent.id, initializeAgentLanguage(agent, parentLang));
+      }
+      
+      // Expand vocabulary based on consciousness and discoveries
+      const agentLang = newAgentLanguages.get(agent.id);
+      if (agentLang) {
+        const consciousnessScore = 
+          (agent.genes.curiosity * 25) + 
+          (agent.genes.creativity * 25) + 
+          (agent.genes.social * 20) +
+          (agent.inventionPoints * 0.5) +
+          (agent.inventions.length * 10);
+        
+        // Expand vocabulary
+        const expandedVocab = expandVocabulary(
+          agentLang.vocabulary,
+          consciousnessScore,
+          physicsVocab,
+          mathVocab,
+          eraState.currentEra.level,
+          currentTick
+        );
+        
+        // Update communication style
+        const newStyle = updateCommunicationStyle(
+          { ...agentLang, vocabulary: expandedVocab },
+          consciousnessScore
+        );
+        
+        newAgentLanguages.set(agent.id, {
+          ...agentLang,
+          vocabulary: expandedVocab,
+          vocabularySize: expandedVocab.length,
+          languageComplexity: expandedVocab.reduce((sum, w) => sum + w.complexity, 0) / expandedVocab.length,
+          communicationStyle: newStyle
+        });
+      }
+    }
+    
+    // Process agent-to-agent dialogues
+    let newSpeechState = { ...speechState };
+    const activeDialogues = [...newSpeechState.activeDialogues];
+    
+    // Check for new dialogue opportunities between nearby agents
+    for (let i = 0; i < newAgents.length; i++) {
+      for (let j = i + 1; j < newAgents.length; j++) {
+        const agent1 = newAgents[i];
+        const agent2 = newAgents[j];
+        const lang1 = newAgentLanguages.get(agent1.id);
+        const lang2 = newAgentLanguages.get(agent2.id);
+        
+        if (lang1 && lang2) {
+          // Check if they can initiate dialogue
+          if (canInitiateDialogue(agent1, agent2, lang1, lang2, currentTick)) {
+            // 5% chance to start a dialogue when conditions are met
+            if (Math.random() < 0.05) {
+              const dialogue = initiateDialogue(agent1, agent2, lang1, lang2, currentTick);
+              activeDialogues.push(dialogue);
+              challengeLogs.push(`💬 Agent ${agent1.id} started conversation with Agent ${agent2.id}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // Continue existing dialogues
+    const updatedDialogues = activeDialogues.map(dialogue => {
+      if (currentTick - dialogue.endTick > 3) {
+        // Dialogue has ended
+        return dialogue;
+      }
+      
+      const speaker = newAgents.find(a => a.id === dialogue.responderId);
+      const listener = newAgents.find(a => a.id === dialogue.initiatorId);
+      const speakerLang = newAgentLanguages.get(dialogue.responderId);
+      const listenerLang = newAgentLanguages.get(dialogue.initiatorId);
+      
+      if (speaker && listener && speakerLang && listenerLang && Math.random() < 0.3) {
+        return continueDialogue(
+          dialogue,
+          speaker,
+          listener,
+          speakerLang,
+          listenerLang,
+          currentTick,
+          physicsState.unlockedConcepts.map(c => c.id),
+          mathState.unlockedConcepts.map(c => c.id)
+        );
+      }
+      return dialogue;
+    });
+    
+    // Update shared vocabulary
+    const allWords = new Map<string, number>();
+    for (const lang of newAgentLanguages.values()) {
+      for (const word of lang.vocabulary) {
+        allWords.set(word.word, (allWords.get(word.word) || 0) + 1);
+      }
+    }
+    const sharedWords = speechState.sharedVocabulary.filter(
+      w => (allWords.get(w.word) || 0) >= 2
+    );
+    
+    // Calculate language evolution level based on average complexity and vocabulary
+    const totalComplexity = Array.from(newAgentLanguages.values())
+      .reduce((sum, lang) => sum + lang.languageComplexity, 0);
+    const avgComplexity = newAgentLanguages.size > 0 ? totalComplexity / newAgentLanguages.size : 1;
+    const evolutionLevel = Math.min(10, Math.floor(avgComplexity));
+    
+    newSpeechState = {
+      ...newSpeechState,
+      activeDialogues: updatedDialogues.filter(d => currentTick - d.endTick <= 5),
+      completedDialogues: newSpeechState.completedDialogues + updatedDialogues.filter(d => currentTick - d.endTick > 5).length,
+      totalWordsKnown: allWords.size,
+      sharedVocabulary: sharedWords,
+      languageEvolutionLevel: evolutionLevel,
+      knowledgeTransferCount: updatedDialogues.reduce((sum, d) => sum + d.knowledgeTransferred.length, 0)
+    };
+    
+    setAgentLanguages(newAgentLanguages);
+    setSpeechState(newSpeechState);
+    
     // Apply challenge-based energy costs to agents
     const challengeEnergyCost = getChallengeEnergyCost(updatedChallengeState);
     let challengeAffectedAgents = newAgents;
@@ -1671,7 +1827,7 @@ const App: React.FC = () => {
 
     // Process communication for self-aware agents
     processCommunication(challengeAffectedAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries]);
+  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -2337,6 +2493,14 @@ const App: React.FC = () => {
           eraState={eraState}
           physicsCount={physicsState.unlockedConcepts.length}
           mathCount={mathState.unlockedConcepts.length}
+          currentTick={tick}
+        />
+
+        {/* Speech & Language */}
+        <SpeechPanel
+          speechState={speechState}
+          agents={agents}
+          agentLanguages={agentLanguages}
           currentTick={tick}
         />
 

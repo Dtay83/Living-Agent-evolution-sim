@@ -14,3 +14,4 @@ export { AnalysisPanel } from './AnalysisPanel';
 export { PhysicsPanel } from './PhysicsPanel';
 export { MathPanel } from './MathPanel';
 export { EraPanel } from './EraPanel';
+export { SpeechPanel } from './SpeechPanel';
