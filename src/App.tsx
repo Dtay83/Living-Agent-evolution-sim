@@ -1,7 +1,7 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
-import { ChatPanel, AnalysisPanel, PhysicsPanel } from "./ui-components";
+import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel } from "./ui-components";
 import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
 import { 
   CommunicationLog, 
@@ -39,6 +39,28 @@ import {
   getPhysicsSummary
 } from "./physics-integration";
 import type { PhysicsConcept } from "./science-system/physics";
+import {
+  CivilizationMath,
+  initializeCivilizationMath,
+  checkMathDiscovery,
+  getResourceOptimizationBonus,
+  getMathEnhancedLearningRate,
+  getMathExplorationBonus,
+  getMathSummary
+} from "./math-integration";
+import type { MathConcept } from "./science-system/mathematics";
+import {
+  CivilizationEraState,
+  initializeCivilizationEra,
+  checkEraAdvancement,
+  checkMilestones,
+  updateProgressionMetrics,
+  getEraBonuses,
+  getEraEnhancedLearningRate,
+  getEraDiscoveryBonus,
+  getEraEnergyEfficiency,
+  calculateInheritedInventions
+} from "./era-integration";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -817,18 +839,25 @@ function getReproductionBonus(agent: Agent): number {
  * - Movement costs affected by physics discoveries
  * - Agents can discover physics concepts
  * - Nearby agents provide collaboration bonuses
+ * 
+ * PHASE 2 UPGRADE: Mathematics integration
+ * - Resource optimization from math knowledge
+ * - Improved Q-learning from statistical concepts
+ * - Math discovery with collaboration bonus
  */
 function stepWorld(
   agents: Agent[],
   grid: Cell[][],
   tick: number,
-  physicsState: CivilizationPhysics
+  physicsState: CivilizationPhysics,
+  mathState: CivilizationMath
 ): { 
   agents: Agent[]; 
   grid: Cell[][]; 
   log: string[]; 
   discoveries: DiscoveryEvent[];
   physicsDiscoveries: PhysicsConcept[];
+  mathDiscoveries: MathConcept[];
 } {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
@@ -838,6 +867,7 @@ function stepWorld(
   const updatedAgents: Agent[] = [];
   const discoveries: DiscoveryEvent[] = [];
   const physicsDiscoveries: PhysicsConcept[] = []; // Track new physics concepts discovered this tick
+  const mathDiscoveries: MathConcept[] = []; // Track new math concepts discovered this tick
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -952,6 +982,21 @@ function stepWorld(
       physicsDiscoveries.push(physicsResult.concept);
       if (physicsResult.log) {
         logs.push(physicsResult.log);
+      }
+    }
+
+    // MATH DISCOVERY - Check if agent discovers a math concept
+    const mathResult = checkMathDiscovery(
+      parentAgent,
+      nearbyAgentsForPhysics, // Same nearby agents for collaboration
+      mathState.unlockedConcepts,
+      tick
+    );
+    
+    if (mathResult.concept) {
+      mathDiscoveries.push(mathResult.concept);
+      if (mathResult.log) {
+        logs.push(mathResult.log);
       }
     }
 
@@ -1102,10 +1147,10 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, physicsDiscoveries };
+    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, physicsDiscoveries, mathDiscoveries };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, physicsDiscoveries };
+  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, physicsDiscoveries, mathDiscoveries };
 }
 
 /**
@@ -1353,6 +1398,15 @@ const App: React.FC = () => {
   // Physics integration state
   const [physicsState, setPhysicsState] = useState<CivilizationPhysics>(initializeCivilizationPhysics());
 
+  // Mathematics integration state
+  const [mathState, setMathState] = useState<CivilizationMath>(initializeCivilizationMath());
+
+  // Era progression state
+  const [eraState, setEraState] = useState<CivilizationEraState>(initializeCivilizationEra());
+
+  // Track collaborative discoveries for milestones
+  const [collaborativeDiscoveries, setCollaborativeDiscoveries] = useState<number>(0);
+
   // Track self-aware agents for communication
   const selfAwareAgentIds = useMemo(() => {
     return agents.filter(agent => {
@@ -1465,18 +1519,20 @@ const App: React.FC = () => {
     );
     setChallengeState(updatedChallengeState);
     
-    // Run the simulation step with physics integration
+    // Run the simulation step with physics and math integration
     const { 
       agents: newAgents, 
       grid: newGrid, 
       log: newLog, 
       discoveries: newDiscoveries,
-      physicsDiscoveries: newPhysicsDiscoveries
+      physicsDiscoveries: newPhysicsDiscoveries,
+      mathDiscoveries: newMathDiscoveries
     } = stepWorld(
       agents,
       renderedGrid,
       currentTick,
-      physicsState
+      physicsState,
+      mathState
     );
     
     // Update physics state with any new discoveries
@@ -1487,6 +1543,91 @@ const App: React.FC = () => {
         totalDiscoveries: prev.totalDiscoveries + newPhysicsDiscoveries.length,
         lastDiscoveryTick: currentTick
       }));
+    }
+    
+    // Update math state with any new discoveries
+    if (newMathDiscoveries.length > 0) {
+      setMathState(prev => ({
+        ...prev,
+        unlockedConcepts: [...prev.unlockedConcepts, ...newMathDiscoveries],
+        totalDiscoveries: prev.totalDiscoveries + newMathDiscoveries.length,
+        lastDiscoveryTick: currentTick
+      }));
+    }
+    
+    // ========================================
+    // PHASE 3: ERA PROGRESSION INTEGRATION
+    // ========================================
+    
+    // Calculate current physics and math counts (include new discoveries)
+    const currentPhysicsCount = physicsState.unlockedConcepts.length + newPhysicsDiscoveries.length;
+    const currentMathCount = mathState.unlockedConcepts.length + newMathDiscoveries.length;
+    const totalInventionCount = newDiscoveries.length + discoveries.length;
+    
+    // Count new collaborative discoveries (discoveries made with nearby agents)
+    // This is tracked from the log messages that mention "collaborated"
+    const newCollabCount = newLog.filter(l => l.includes('collaborated')).length;
+    if (newCollabCount > 0) {
+      setCollaborativeDiscoveries(prev => prev + newCollabCount);
+    }
+    
+    // Update progression metrics
+    const newDiscoveryCount = newPhysicsDiscoveries.length + newMathDiscoveries.length + newDiscoveries.length;
+    
+    // Check for era advancement
+    const eraAdvanceResult = checkEraAdvancement(
+      eraState,
+      currentPhysicsCount,
+      currentMathCount,
+      totalInventionCount,
+      currentTick
+    );
+    
+    // Check for new milestones
+    const newMilestones = checkMilestones(
+      eraState,
+      currentPhysicsCount,
+      currentMathCount,
+      totalInventionCount,
+      newAgents.length,
+      collaborativeDiscoveries + newCollabCount,
+      currentTick
+    );
+    
+    // Update era state
+    if (eraAdvanceResult.shouldAdvance || newMilestones.length > 0 || newDiscoveryCount > 0) {
+      setEraState(prev => {
+        let newState = { ...prev };
+        
+        // Update metrics
+        newState.metrics = updateProgressionMetrics(prev.metrics, newDiscoveryCount, currentTick);
+        
+        // Add new milestones
+        if (newMilestones.length > 0) {
+          newState.milestones = [...prev.milestones, ...newMilestones];
+          // Log milestone achievements
+          for (const milestone of newMilestones) {
+            challengeLogs.push(`🏆 Milestone achieved: ${milestone.name}!`);
+          }
+        }
+        
+        // Advance era if requirements met
+        if (eraAdvanceResult.shouldAdvance && eraAdvanceResult.nextEra) {
+          newState.currentEra = eraAdvanceResult.nextEra;
+          newState.allEras = [...prev.allEras, eraAdvanceResult.nextEra];
+          newState.lastEraAdvanceTick = currentTick;
+          newState.metrics = {
+            ...newState.metrics,
+            currentEraLevel: eraAdvanceResult.nextEra.level,
+            ticksSinceLastEra: 0
+          };
+          if (eraAdvanceResult.log) {
+            challengeLogs.push(eraAdvanceResult.log);
+          }
+        }
+        
+        return newState;
+      });
     }
     
     // Apply challenge-based energy costs to agents
@@ -1530,7 +1671,7 @@ const App: React.FC = () => {
 
     // Process communication for self-aware agents
     processCommunication(challengeAffectedAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, challengeState]);
+  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -1644,6 +1785,8 @@ const App: React.FC = () => {
     setChallengeState(initializeChallengeState());
     // Reset physics state
     setPhysicsState(initializeCivilizationPhysics());
+    // Reset math state
+    setMathState(initializeCivilizationMath());
   };
 
   // Auto-run interval
@@ -2179,6 +2322,21 @@ const App: React.FC = () => {
         <PhysicsPanel 
           unlockedConcepts={physicsState.unlockedConcepts}
           lastDiscoveryTick={physicsState.lastDiscoveryTick}
+          currentTick={tick}
+        />
+
+        {/* Mathematics Progress */}
+        <MathPanel 
+          unlockedConcepts={mathState.unlockedConcepts}
+          lastDiscoveryTick={mathState.lastDiscoveryTick}
+          currentTick={tick}
+        />
+
+        {/* Era Progression */}
+        <EraPanel
+          eraState={eraState}
+          physicsCount={physicsState.unlockedConcepts.length}
+          mathCount={mathState.unlockedConcepts.length}
           currentTick={tick}
         />
 

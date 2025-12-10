@@ -12,3 +12,5 @@ export { ConsciousnessPanel, ConsciousnessSummaryPanel } from './ConsciousnessPa
 export { ChatPanel } from './ChatPanel';
 export { AnalysisPanel } from './AnalysisPanel';
 export { PhysicsPanel } from './PhysicsPanel';
+export { MathPanel } from './MathPanel';
+export { EraPanel } from './EraPanel';
