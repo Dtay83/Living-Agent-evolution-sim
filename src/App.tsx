@@ -1,7 +1,7 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
-import { ChatPanel, AnalysisPanel } from "./ui-components";
+import { ChatPanel, AnalysisPanel, PhysicsPanel } from "./ui-components";
 import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
 import { 
   CommunicationLog, 
@@ -28,6 +28,17 @@ import {
   hasNegativeChallenge,
   hasPositiveEvent
 } from "./core/challenges";
+import {
+  CivilizationPhysics,
+  initializeCivilizationPhysics,
+  checkPhysicsDiscovery,
+  getPhysicsMovementCost,
+  getAgentPhysicsBonuses,
+  getPhysicsEnhancedLearningRate,
+  getPhysicsInventionBonus,
+  getPhysicsSummary
+} from "./physics-integration";
+import type { PhysicsConcept } from "./science-system/physics";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -463,7 +474,6 @@ function mutateGenes(parent: Genes): Genes {
     0.0,
     1.0
   );
-
   // sometimes spawn a totally new traitId => random trait generation
   const traitId =
     Math.random() < CONFIG.genes.mutation.newTraitChance ? randomTraitId() : parent.traitId;
@@ -479,6 +489,109 @@ function mutateGenes(parent: Genes): Genes {
     creativity,
     patience,
   };
+}
+
+/**
+ * BIODIVERSITY ENHANCEMENT: Calculate genetic distance between two agents
+ * Higher distance = more genetically different = better for biodiversity
+ */
+function calculateGeneticDistance(genes1: Genes, genes2: Genes): number {
+  const diffs = [
+    Math.abs(genes1.foodPreference - genes2.foodPreference),
+    Math.abs(genes1.exploration - genes2.exploration),
+    Math.abs(genes1.curiosity - genes2.curiosity),
+    Math.abs(genes1.social - genes2.social),
+    Math.abs(genes1.creativity - genes2.creativity),
+    Math.abs(genes1.patience - genes2.patience),
+    Math.abs(genes1.mutationRate - genes2.mutationRate),
+    genes1.traitId !== genes2.traitId ? 1 : 0, // Bonus for different trait families
+  ];
+  return diffs.reduce((sum, d) => sum + d, 0) / diffs.length;
+}
+
+/**
+ * BIODIVERSITY ENHANCEMENT: Crossover genes from two parents
+ * Creates offspring with mixed genes, favoring diversity
+ */
+function crossoverGenes(parent1: Genes, parent2: Genes, diversityBonus: number): Genes {
+  // Boost mutation rate based on genetic distance (more diverse = more mutation)
+  const baseMutationRate = (parent1.mutationRate + parent2.mutationRate) / 2;
+  const boostedMutationRate = Math.min(0.6, baseMutationRate * (1 + diversityBonus));
+  
+  // For each gene, randomly select from either parent or blend
+  const selectGene = (g1: number, g2: number): number => {
+    const r = Math.random();
+    if (r < 0.4) return g1;           // 40% from parent 1
+    if (r < 0.8) return g2;           // 40% from parent 2
+    return (g1 + g2) / 2;             // 20% blend
+  };
+
+  const baseGenes = {
+    foodPreference: selectGene(parent1.foodPreference, parent2.foodPreference),
+    exploration: selectGene(parent1.exploration, parent2.exploration),
+    reproductionThreshold: selectGene(parent1.reproductionThreshold, parent2.reproductionThreshold),
+    mutationRate: boostedMutationRate,
+    curiosity: selectGene(parent1.curiosity, parent2.curiosity),
+    social: selectGene(parent1.social, parent2.social),
+    creativity: selectGene(parent1.creativity, parent2.creativity),
+    patience: selectGene(parent1.patience, parent2.patience),
+    // Higher chance of new trait when parents are diverse
+    traitId: Math.random() < (CONFIG.genes.mutation.newTraitChance + diversityBonus * 0.3)
+      ? randomTraitId()
+      : Math.random() < 0.5 ? parent1.traitId : parent2.traitId,
+  };
+
+  // Apply mutations with boosted rate
+  return {
+    foodPreference: mutateValue(baseGenes.foodPreference, boostedMutationRate, CONFIG.genes.mutation.foodPreferenceMagnitude, 0, 1),
+    exploration: mutateValue(baseGenes.exploration, boostedMutationRate, CONFIG.genes.mutation.explorationMagnitude, 0, 1),
+    reproductionThreshold: mutateValue(baseGenes.reproductionThreshold, boostedMutationRate, CONFIG.genes.mutation.reproductionThresholdMagnitude, CONFIG.genes.mutation.reproductionThresholdMin, CONFIG.genes.mutation.reproductionThresholdMax),
+    mutationRate: mutateValue(boostedMutationRate, boostedMutationRate, CONFIG.genes.mutation.mutationRateMagnitude, CONFIG.genes.mutation.mutationRateEvolveMin, CONFIG.genes.mutation.mutationRateEvolveMax),
+    traitId: baseGenes.traitId,
+    curiosity: mutateValue(baseGenes.curiosity, boostedMutationRate, CONFIG.genes.mutation.curiosityMagnitude, 0, 1),
+    social: mutateValue(baseGenes.social, boostedMutationRate, CONFIG.genes.mutation.socialMagnitude, 0, 1),
+    creativity: mutateValue(baseGenes.creativity, boostedMutationRate, CONFIG.genes.mutation.creativityMagnitude, 0, 1),
+    patience: mutateValue(baseGenes.patience, boostedMutationRate, CONFIG.genes.mutation.patienceMagnitude, 0, 1),
+  };
+}
+
+/**
+ * BIODIVERSITY ENHANCEMENT: Find best mate nearby prioritizing genetic diversity
+ * Returns the most genetically different nearby agent, or null for asexual reproduction
+ */
+function findBestMate(
+  parent: Agent,
+  allAgents: Agent[],
+  mateSearchRadius: number = 3
+): Agent | null {
+  // Find nearby agents within mating range
+  const nearbyAgents = allAgents.filter(a =>
+    a.id !== parent.id &&
+    a.energy > 5 && // Must have some energy
+    Math.abs(a.x - parent.x) <= mateSearchRadius &&
+    Math.abs(a.y - parent.y) <= mateSearchRadius
+  );
+
+  if (nearbyAgents.length === 0) return null;
+
+  // Score each potential mate by genetic distance (higher = better for diversity)
+  const scoredMates = nearbyAgents.map(mate => ({
+    mate,
+    distance: calculateGeneticDistance(parent.genes, mate.genes),
+  }));
+
+  // Sort by genetic distance (descending) - prefer more different mates
+  scoredMates.sort((a, b) => b.distance - a.distance);
+
+  // Probabilistically select mate, heavily favoring diverse genetics
+  // 60% chance to pick most diverse, 25% second, 10% third, 5% random
+  const r = Math.random();
+  if (r < 0.60 && scoredMates.length >= 1) return scoredMates[0].mate;
+  if (r < 0.85 && scoredMates.length >= 2) return scoredMates[1].mate;
+  if (r < 0.95 && scoredMates.length >= 3) return scoredMates[2].mate;
+  
+  // Random selection from remaining
+  return scoredMates[randomInt(scoredMates.length)].mate;
 }
 
 /**
@@ -699,12 +812,24 @@ function getReproductionBonus(agent: Agent): number {
  * 
  * CRITICAL BUG FIX #2: Added collision detection
  * Now tracks intended moves and prevents multiple agents from occupying the same cell
+ * 
+ * PHASE 1 UPGRADE: Physics integration
+ * - Movement costs affected by physics discoveries
+ * - Agents can discover physics concepts
+ * - Nearby agents provide collaboration bonuses
  */
 function stepWorld(
   agents: Agent[],
   grid: Cell[][],
-  tick: number
-): { agents: Agent[]; grid: Cell[][]; log: string[]; discoveries: DiscoveryEvent[] } {
+  tick: number,
+  physicsState: CivilizationPhysics
+): { 
+  agents: Agent[]; 
+  grid: Cell[][]; 
+  log: string[]; 
+  discoveries: DiscoveryEvent[];
+  physicsDiscoveries: PhysicsConcept[];
+} {
   const newGrid: Cell[][] = grid.map(row =>
     row.map(cell => ({ ...cell, agentId: undefined }))
   );
@@ -712,6 +837,7 @@ function stepWorld(
   const logs: string[] = [];
   const updatedAgents: Agent[] = [];
   const discoveries: DiscoveryEvent[] = [];
+  const physicsDiscoveries: PhysicsConcept[] = []; // Track new physics concepts discovered this tick
 
   let nextId = agents.reduce((max, a) => Math.max(max, a.id), 0) + 1;
 
@@ -764,8 +890,9 @@ function stepWorld(
       destinationMap.set(destKey, agent.id);
     }
 
-    // Apply energy cost with invention effects
-    const movementCost = getMovementCost(agent);
+    // Apply energy cost with invention AND physics effects
+    const baseMovementCost = getMovementCost(agent);
+    const movementCost = getPhysicsMovementCost(agent, baseMovementCost, physicsState.unlockedConcepts);
     let newEnergy = agent.energy - movementCost;
     const cell = newGrid[finalY][finalX];
     let ateFood = false;
@@ -806,7 +933,29 @@ function stepWorld(
       );
     }
 
-    // REPRODUCTION
+    // PHYSICS DISCOVERY - Check if agent discovers a physics concept
+    // Find nearby agents for collaboration bonus
+    const nearbyAgentsForPhysics = agents.filter(a =>
+      a.id !== agent.id &&
+      Math.abs(a.x - finalX) <= 2 &&
+      Math.abs(a.y - finalY) <= 2
+    );
+    
+    const physicsResult = checkPhysicsDiscovery(
+      parentAgent,
+      nearbyAgentsForPhysics,
+      physicsState.unlockedConcepts,
+      tick
+    );
+    
+    if (physicsResult.concept) {
+      physicsDiscoveries.push(physicsResult.concept);
+      if (physicsResult.log) {
+        logs.push(physicsResult.log);
+      }
+    }
+
+    // REPRODUCTION - BIODIVERSITY ENHANCED
     const reproThreshold = parentAgent.genes.reproductionThreshold;
     let reproduced = false;
 
@@ -836,15 +985,45 @@ function stepWorld(
         const childEnergy = Math.floor(parentAgent.energy / 2);
         parentAgent = { ...parentAgent, energy: parentAgent.energy - childEnergy };
 
-        const childGenes = mutateGenes(parentAgent.genes);
+        // BIODIVERSITY: Try to find a mate for sexual reproduction
+        const mate = findBestMate(parentAgent, agents);
+        let childGenes: Genes;
+        let reproductionType: string;
+        let diversityBonus = 0;
+        
+        if (mate) {
+          // Sexual reproduction with crossover - prioritizes genetic diversity
+          diversityBonus = calculateGeneticDistance(parentAgent.genes, mate.genes);
+          childGenes = crossoverGenes(parentAgent.genes, mate.genes, diversityBonus);
+          reproductionType = diversityBonus > 0.3 
+            ? `Sexual (high diversity: ${(diversityBonus * 100).toFixed(0)}%)` 
+            : `Sexual (mate: Agent ${mate.id})`;
+        } else {
+          // Asexual reproduction with normal mutation
+          childGenes = mutateGenes(parentAgent.genes);
+          reproductionType = 'Asexual (no nearby mates)';
+        }
         
         // Inheritance: children can inherit parent's inventions based on social gene
         const inheritedInventions = parentAgent.inventions.filter(
           inv => Math.random() < parentAgent.genes.social * 0.8
         );
         
+        // If sexual reproduction, also chance to inherit from mate
+        if (mate) {
+          const mateInventions = mate.inventions.filter(
+            inv => Math.random() < mate.genes.social * 0.5 && 
+                   !inheritedInventions.some(i => i.id === inv.id)
+          );
+          inheritedInventions.push(...mateInventions);
+        }
+        
         // Children inherit a portion of parent's invention points (learning from parent)
-        const inheritedPoints = parentAgent.inventionPoints * parentAgent.genes.social * 0.3;
+        let inheritedPoints = parentAgent.inventionPoints * parentAgent.genes.social * 0.3;
+        if (mate) {
+          // Also inherit some from mate
+          inheritedPoints += mate.inventionPoints * mate.genes.social * 0.2;
+        }
         
         const child: Agent = {
           id: nextId++,
@@ -853,13 +1032,13 @@ function stepWorld(
           energy: childEnergy,
           genes: childGenes,
           memory: { qTable: {} },
-          lastRule: 'Born (genetic memory + "Mutation")',
+          lastRule: `Born (${reproductionType})`,
           inventions: inheritedInventions.map(inv => ({
             ...inv,
             // Mark as inherited, not discovered by this agent
             discoveredBy: parentAgent.id,
           })),
-          inventionPoints: inheritedPoints, // NEW: Inherit some creativity points
+          inventionPoints: inheritedPoints,
         };
 
         newGrid[spot.y][spot.x].agentId = child.id;
@@ -870,10 +1049,13 @@ function stepWorld(
         reproduced = true;
 
         const inheritMsg = inheritedInventions.length > 0 
-          ? ` inherited ${inheritedInventions.length} inventions`
+          ? `, inherited ${inheritedInventions.length} inventions`
+          : '';
+        const diversityMsg = diversityBonus > 0.2 
+          ? ` 🧬 HIGH DIVERSITY!` 
           : '';
         logs.push(
-          `Agent ${parentAgent.id} reproduced: child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}, energy ${childEnergy}${inheritMsg}`
+          `Agent ${parentAgent.id} reproduced (${reproductionType}): child ${child.id} at (${spot.x},${spot.y}) with traitId ${child.genes.traitId}${inheritMsg}${diversityMsg}`
         );
       }
     }
@@ -920,10 +1102,10 @@ function stepWorld(
    */
   if (Math.random() < CONFIG.simulation.foodSpawnChance) {
     const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries };
+    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, physicsDiscoveries };
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries };
+  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, physicsDiscoveries };
 }
 
 /**
@@ -1168,6 +1350,9 @@ const App: React.FC = () => {
   // Environmental challenges state
   const [challengeState, setChallengeState] = useState<ChallengeState>(initializeChallengeState());
 
+  // Physics integration state
+  const [physicsState, setPhysicsState] = useState<CivilizationPhysics>(initializeCivilizationPhysics());
+
   // Track self-aware agents for communication
   const selfAwareAgentIds = useMemo(() => {
     return agents.filter(agent => {
@@ -1280,13 +1465,31 @@ const App: React.FC = () => {
     );
     setChallengeState(updatedChallengeState);
     
-    // Run the simulation step
-    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
+    // Run the simulation step with physics integration
+    const { 
+      agents: newAgents, 
+      grid: newGrid, 
+      log: newLog, 
+      discoveries: newDiscoveries,
+      physicsDiscoveries: newPhysicsDiscoveries
+    } = stepWorld(
       agents,
       renderedGrid,
-      currentTick
+      currentTick,
+      physicsState
     );
-      // Apply challenge-based energy costs to agents
+    
+    // Update physics state with any new discoveries
+    if (newPhysicsDiscoveries.length > 0) {
+      setPhysicsState(prev => ({
+        ...prev,
+        unlockedConcepts: [...prev.unlockedConcepts, ...newPhysicsDiscoveries],
+        totalDiscoveries: prev.totalDiscoveries + newPhysicsDiscoveries.length,
+        lastDiscoveryTick: currentTick
+      }));
+    }
+    
+    // Apply challenge-based energy costs to agents
     const challengeEnergyCost = getChallengeEnergyCost(updatedChallengeState);
     let challengeAffectedAgents = newAgents;
     
@@ -1439,6 +1642,8 @@ const App: React.FC = () => {
     setCommunicationStates(new Map());
     // Reset challenge state
     setChallengeState(initializeChallengeState());
+    // Reset physics state
+    setPhysicsState(initializeCivilizationPhysics());
   };
 
   // Auto-run interval
@@ -1969,6 +2174,13 @@ const App: React.FC = () => {
 
         {/* Invention Statistics */}
         <InventionStats agents={agents} discoveries={discoveries} />
+
+        {/* Physics Progress */}
+        <PhysicsPanel 
+          unlockedConcepts={physicsState.unlockedConcepts}
+          lastDiscoveryTick={physicsState.lastDiscoveryTick}
+          currentTick={tick}
+        />
 
         {/* Log */}
         <div

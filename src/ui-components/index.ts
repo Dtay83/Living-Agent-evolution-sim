@@ -11,3 +11,4 @@ export { ScienceProgressPanel } from './ScienceProgressPanel';
 export { ConsciousnessPanel, ConsciousnessSummaryPanel } from './ConsciousnessPanel';
 export { ChatPanel } from './ChatPanel';
 export { AnalysisPanel } from './AnalysisPanel';
+export { PhysicsPanel } from './PhysicsPanel';
