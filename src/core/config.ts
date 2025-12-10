@@ -5,8 +5,8 @@
 
 export const CONFIG = {
   grid: {
-    initialWidth: 16,
-    initialHeight: 10,
+    initialWidth: 25,
+    initialHeight: 25,
     maxWidth: 27,         // Maximum grid width before performance issues
     maxHeight: 30,        // Maximum grid height
     expandBy: 2,          // Number of cells to add when expanding
