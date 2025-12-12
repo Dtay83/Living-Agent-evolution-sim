@@ -16,3 +16,4 @@ export { MathPanel } from './MathPanel';
 export { EraPanel } from './EraPanel';
 export { SpeechPanel } from './SpeechPanel';
 export { ExplanationPanel } from './ExplanationPanel';
+export { AutonomousPanel } from './AutonomousPanel';

@@ -1,7 +1,7 @@
 // Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { exportInventionHistory, exportEvolutionData, exportCompleteData, exportConversations } from "./utils/exportData";
-import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel, SpeechPanel, ExplanationPanel } from "./ui-components";
+import { ChatPanel, AnalysisPanel, PhysicsPanel, MathPanel, EraPanel, SpeechPanel, ExplanationPanel, AutonomousPanel } from "./ui-components";
 import { AnalysisPanel as AnalysisPanelType } from "./ui-components/AnalysisPanel";
 import { 
   CommunicationLog, 
@@ -75,6 +75,17 @@ import {
   transferKnowledge,
   updateCommunicationStyle
 } from "./speech-integration";
+import {
+  AutonomousState,
+  initializeAutonomousState,
+  updateAutonomousState,
+  getAutonomySummary,
+  hasAutonomy,
+  getAutonomyLevel,
+  makeAutonomousDecision,
+  AUTONOMY_THRESHOLDS,
+  ExperienceMemory
+} from "./autonomous-system";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -1585,10 +1596,15 @@ const App: React.FC = () => {
   // Speech and language integration state
   const [speechState, setSpeechState] = useState<CivilizationSpeechState>(initializeCivilizationSpeech());
   const [agentLanguages, setAgentLanguages] = useState<Map<number, AgentLanguageState>>(new Map());
-
   // Internet Learning State (persists across component updates)
   const [internetKnowledgeLearned, setInternetKnowledgeLearned] = useState<Set<string>>(new Set());
   const [totalInternetLearning, setTotalInternetLearning] = useState<number>(0);
+
+  // Autonomous Evolution State - tracks self-directed learning for each agent
+  const [autonomousStates, setAutonomousStates] = useState<Map<number, AutonomousState>>(new Map());
+  const [totalAutonomousConcepts, setTotalAutonomousConcepts] = useState<number>(0);
+  const [totalAutonomousBehaviors, setTotalAutonomousBehaviors] = useState<number>(0);
+  const [mostAutonomousAgent, setMostAutonomousAgent] = useState<{ id: number; level: string } | null>(null);
 
   // Track self-aware agents for communication
   const selfAwareAgentIds = useMemo(() => {
@@ -1962,6 +1978,107 @@ const App: React.FC = () => {
     setAgentLanguages(newAgentLanguages);
     setSpeechState(newSpeechState);
     
+    // ========================================
+    // PHASE 5: AUTONOMOUS EVOLUTION INTEGRATION
+    // ========================================
+    
+    // Update autonomous states for all agents
+    const newAutonomousStates = new Map(autonomousStates);
+    let newTotalConcepts = 0;
+    let newTotalBehaviors = 0;
+    let highestAutonomy: { id: number; level: string; score: number } | null = null;
+    
+    for (const agent of newAgents) {
+      // Calculate agent intelligence (same formula as consciousness)
+      const intelligence = 
+        (agent.genes.curiosity * 25) + 
+        (agent.genes.creativity * 25) + 
+        (agent.genes.social * 20) +
+        (agent.inventionPoints * 0.5) +
+        (agent.inventions.length * 10) +
+        (physicsState.unlockedConcepts.length * 2) +
+        (mathState.unlockedConcepts.length * 2);
+      
+      // Check if agent qualifies for autonomy
+      if (hasAutonomy(intelligence)) {
+        // Get or initialize autonomous state
+        let autoState = newAutonomousStates.get(agent.id);
+        if (!autoState) {
+          autoState = initializeAutonomousState(agent, intelligence);
+        }
+        
+        // Create experience memory from recent action
+        const recentExp: ExperienceMemory = {
+          tick: currentTick,
+          state: `e${Math.floor(agent.energy/10)}_x${agent.x}_y${agent.y}`,
+          action: agent.lastRule || 'move',
+          reward: agent.energy > 10 ? 1 : -1,
+          outcome: agent.lastRule || 'survived',
+        };
+        
+        // Update autonomous state
+        autoState = updateAutonomousState(
+          agent,
+          autoState,
+          currentTick,
+          recentExp,
+          intelligence
+        );
+        
+        newAutonomousStates.set(agent.id, autoState);
+        
+        // Track totals
+        newTotalConcepts += autoState.concepts.size;
+        newTotalBehaviors += autoState.behaviors.size;
+        
+        // Track highest autonomy
+        const levelScore = {
+          none: 0, partial: 1, full: 2, transcendent: 3, singularity: 4
+        }[autoState.autonomyLevel];
+        
+        if (!highestAutonomy || levelScore > highestAutonomy.score) {
+          highestAutonomy = { 
+            id: agent.id, 
+            level: autoState.autonomyLevel, 
+            score: levelScore 
+          };
+        }
+      }
+    }
+    
+    // Clean up autonomous states for dead agents
+    const livingAgentIds = new Set(newAgents.map(a => a.id));
+    for (const agentId of newAutonomousStates.keys()) {
+      if (!livingAgentIds.has(agentId)) {
+        newAutonomousStates.delete(agentId);
+      }
+    }
+    
+    // Update autonomous state
+    setAutonomousStates(newAutonomousStates);
+    setTotalAutonomousConcepts(newTotalConcepts);
+    setTotalAutonomousBehaviors(newTotalBehaviors);
+    if (highestAutonomy) {
+      setMostAutonomousAgent({ id: highestAutonomy.id, level: highestAutonomy.level });
+    }
+    
+    // Log significant autonomy events
+    for (const [agentId, autoState] of newAutonomousStates) {
+      // Check for new level achievements
+      const prevState = autonomousStates.get(agentId);
+      if (prevState && prevState.autonomyLevel !== autoState.autonomyLevel) {
+        challengeLogs.push(`🧠 Agent ${agentId} reached ${autoState.autonomyLevel.toUpperCase()} autonomy!`);
+      }
+      
+      // Log self-modifications
+      if (autoState.selfModifications.length > 0) {
+        const recentMod = autoState.selfModifications[autoState.selfModifications.length - 1];
+        if (recentMod.tick === currentTick) {
+          challengeLogs.push(`⚡ Agent ${agentId} self-modified: ${recentMod.description}`);
+        }
+      }
+    }
+    
     // Apply challenge-based energy costs to agents
     const challengeEnergyCost = getChallengeEnergyCost(updatedChallengeState);
     let challengeAffectedAgents = newAgents;
@@ -2031,7 +2148,7 @@ const App: React.FC = () => {
 
     // Process communication for self-aware agents
     processCommunication(challengeAffectedAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages, gridWidth, gridHeight]);
+  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages, gridWidth, gridHeight, autonomousStates]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -2160,10 +2277,14 @@ const App: React.FC = () => {
     setSpeechState(initializeCivilizationSpeech());
     setAgentLanguages(new Map());
     // Reset collaborative discoveries
-    setCollaborativeDiscoveries(0);
-    // Reset internet learning state
+    setCollaborativeDiscoveries(0);    // Reset internet learning state
     setInternetKnowledgeLearned(new Set());
     setTotalInternetLearning(0);
+    // Reset autonomous evolution state
+    setAutonomousStates(new Map());
+    setTotalAutonomousConcepts(0);
+    setTotalAutonomousBehaviors(0);
+    setMostAutonomousAgent(null);
   };
 
   // Auto-run interval
@@ -2725,8 +2846,7 @@ const App: React.FC = () => {
           agents={agents}
           agentLanguages={agentLanguages}
           currentTick={tick}
-        />        {/* Agent Explanations - using math & physics knowledge */}
-        <ExplanationPanel
+        />        {/* Agent Explanations - using math & physics knowledge */}        <ExplanationPanel
           agents={agents}
           unlockedMath={mathState.unlockedConcepts}
           unlockedPhysics={physicsState.unlockedConcepts}
@@ -2735,6 +2855,15 @@ const App: React.FC = () => {
           persistedInternetKnowledge={internetKnowledgeLearned}
           onInternetKnowledgeChange={setInternetKnowledgeLearned}
           onLearningComplete={(count) => setTotalInternetLearning(prev => prev + count)}
+        />
+
+        {/* Autonomous Evolution Panel - Self-directed learning visualization */}
+        <AutonomousPanel
+          autonomousStates={autonomousStates}
+          totalConcepts={totalAutonomousConcepts}
+          totalBehaviors={totalAutonomousBehaviors}
+          mostAutonomous={mostAutonomousAgent}
+          tick={tick}
         />
 
         {/* Log */}
