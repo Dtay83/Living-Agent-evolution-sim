@@ -103,8 +103,7 @@ export function initializeCivilizationEra(): CivilizationEraState {
     physicsUnlocked: [],
     mathUnlocked: []
   };
-  
-  return {
+    return {
     currentEra: initialEra,
     allEras: [initialEra],
     metrics: {
@@ -113,7 +112,15 @@ export function initializeCivilizationEra(): CivilizationEraState {
       averageDiscoveryRate: 0,
       currentEraLevel: 0,
       ticksSinceLastEra: 0,
-      scientificAcceleration: 1.0
+      scientificAcceleration: 1.0,
+      // Extended metrics
+      collaborativeDiscoveries: 0,
+      categoryBreakthroughs: 0,
+      peakMomentum: 1.0,
+      averageComplexity: 0,
+      physicsCategories: 0,
+      mathCategories: 0,
+      transcendentDiscoveries: 0
     },
     milestones: [],
     lastEraAdvanceTick: 0

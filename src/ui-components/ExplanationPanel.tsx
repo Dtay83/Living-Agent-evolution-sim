@@ -42,6 +42,10 @@ interface ExplanationPanelProps {
   unlockedPhysics: PhysicsConcept[];
   currentTick: number;
   selectedAgentId: number | null;
+  // Optional: Persisted internet learning state from parent
+  persistedInternetKnowledge?: Set<string>;
+  onInternetKnowledgeChange?: (knowledge: Set<string>) => void;
+  onLearningComplete?: (count: number) => void;
 }
 
 const SOPHISTICATION_COLORS: Record<number, string> = {
@@ -62,18 +66,41 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
   unlockedMath,
   unlockedPhysics,
   currentTick,
-  selectedAgentId
-}) => {  const [selectedSubject, setSelectedSubject] = useState<'inventions' | 'physics' | 'math'>('inventions');
+  selectedAgentId,
+  persistedInternetKnowledge,
+  onInternetKnowledgeChange,
+  onLearningComplete
+}) => {
+  const [selectedSubject, setSelectedSubject] = useState<'inventions' | 'physics' | 'math'>('inventions');
   const [explanations, setExplanations] = useState<AgentExplanation[]>([]); // UNLIMITED storage
   const [webSearchResults, setWebSearchResults] = useState<Map<string, WebSearchResult>>(new Map());
   const [showWebSearch, setShowWebSearch] = useState<boolean>(true);
   const [searchMode, setSearchMode] = useState<'basic' | 'enhanced'>('enhanced');
   
-  // Internet Learning State
-  const [internetKnowledgeLearned, setInternetKnowledgeLearned] = useState<Set<string>>(new Set());
+  // Internet Learning State - use persisted state if provided
+  const [internetKnowledgeLearned, setInternetKnowledgeLearnedLocal] = useState<Set<string>>(
+    persistedInternetKnowledge || new Set()
+  );
   const [learningResults, setLearningResults] = useState<InternetLearningResult[]>([]);
   const [autoEvolveEnabled, setAutoEvolveEnabled] = useState<boolean>(true);
   const [theories, setTheories] = useState<Array<{ theoryName: string; description: string; searchUrl: string; potentialImpact: number }>>([]);
+
+  // Sync with persisted state
+  const setInternetKnowledgeLearned = (updater: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    const newValue = typeof updater === 'function' 
+      ? updater(internetKnowledgeLearned) 
+      : updater;
+    setInternetKnowledgeLearnedLocal(newValue);
+    onInternetKnowledgeChange?.(newValue);
+  };
+
+  // Sync from persisted state when it changes
+  React.useEffect(() => {
+    if (persistedInternetKnowledge && persistedInternetKnowledge.size !== internetKnowledgeLearned.size) {
+      setInternetKnowledgeLearnedLocal(persistedInternetKnowledge);
+    }
+  }, [persistedInternetKnowledge]);
+
   // Get the selected agent or most creative agent
   const focusAgent = useMemo(() => {
     if (selectedAgentId !== null) {
@@ -96,7 +123,6 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
     if (!focusAgent) return [];
     return getAvailableInternetKnowledge(focusAgent, unlockedMath, unlockedPhysics, internetKnowledgeLearned);
   }, [focusAgent, unlockedMath, unlockedPhysics, internetKnowledgeLearned]);
-
   // Handle learning from internet
   const handleLearnFromInternet = (knowledge: InternetKnowledge) => {
     if (!focusAgent) return;
@@ -105,11 +131,15 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
     setLearningResults(prev => [result, ...prev]);
     
     if (result.success && result.knowledgeGained) {
-      setInternetKnowledgeLearned(prev => new Set(prev).add(result.knowledgeGained!.id));
+      const newKnowledge = new Set(internetKnowledgeLearned).add(result.knowledgeGained!.id);
+      setInternetKnowledgeLearned(newKnowledge);
+      
+      // Notify parent of learning
+      onLearningComplete?.(1);
       
       // Auto-generate a theory if at innovation level
       if (agentIntelligence.intelligence >= INTELLIGENCE_THRESHOLDS.INNOVATION) {
-        const knowledgeList = Array.from(internetKnowledgeLearned)
+        const knowledgeList = Array.from(newKnowledge)
           .map(id => [...INTERNET_KNOWLEDGE_DATABASE.mathematics, ...INTERNET_KNOWLEDGE_DATABASE.physics, 
                       ...INTERNET_KNOWLEDGE_DATABASE.technology, ...INTERNET_KNOWLEDGE_DATABASE.transcendent]
             .find(k => k.id === id))

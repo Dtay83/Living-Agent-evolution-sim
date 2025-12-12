@@ -1582,10 +1582,13 @@ const App: React.FC = () => {
 
   // Track collaborative discoveries for milestones
   const [collaborativeDiscoveries, setCollaborativeDiscoveries] = useState<number>(0);
-
   // Speech and language integration state
   const [speechState, setSpeechState] = useState<CivilizationSpeechState>(initializeCivilizationSpeech());
   const [agentLanguages, setAgentLanguages] = useState<Map<number, AgentLanguageState>>(new Map());
+
+  // Internet Learning State (persists across component updates)
+  const [internetKnowledgeLearned, setInternetKnowledgeLearned] = useState<Set<string>>(new Set());
+  const [totalInternetLearning, setTotalInternetLearning] = useState<number>(0);
 
   // Track self-aware agents for communication
   const selfAwareAgentIds = useMemo(() => {
@@ -2153,12 +2156,14 @@ const App: React.FC = () => {
     setGeneratedPhysicsLevel(0);
     setGeneratedMathLevel(0);
     // Reset era state
-    setEraState(initializeCivilizationEra());
-    // Reset speech state
+    setEraState(initializeCivilizationEra());    // Reset speech state
     setSpeechState(initializeCivilizationSpeech());
     setAgentLanguages(new Map());
     // Reset collaborative discoveries
     setCollaborativeDiscoveries(0);
+    // Reset internet learning state
+    setInternetKnowledgeLearned(new Set());
+    setTotalInternetLearning(0);
   };
 
   // Auto-run interval
@@ -2720,15 +2725,16 @@ const App: React.FC = () => {
           agents={agents}
           agentLanguages={agentLanguages}
           currentTick={tick}
-        />
-
-        {/* Agent Explanations - using math & physics knowledge */}
+        />        {/* Agent Explanations - using math & physics knowledge */}
         <ExplanationPanel
           agents={agents}
           unlockedMath={mathState.unlockedConcepts}
           unlockedPhysics={physicsState.unlockedConcepts}
           currentTick={tick}
           selectedAgentId={selectedAgentId}
+          persistedInternetKnowledge={internetKnowledgeLearned}
+          onInternetKnowledgeChange={setInternetKnowledgeLearned}
+          onLearningComplete={(count) => setTotalInternetLearning(prev => prev + count)}
         />
 
         {/* Log */}
