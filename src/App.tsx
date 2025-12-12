@@ -79,13 +79,17 @@ import {
   AutonomousState,
   initializeAutonomousState,
   updateAutonomousState,
-  getAutonomySummary,
-  hasAutonomy,
+  getAutonomySummary,  hasAutonomy,
   getAutonomyLevel,
   makeAutonomousDecision,
   AUTONOMY_THRESHOLDS,
   ExperienceMemory
 } from "./autonomous-system";
+import {
+  runAutoLearningForAllAgents,
+  AUTO_LEARNING_CONFIG,
+  AutoLearningResult
+} from "./explanation-system";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 
@@ -1595,10 +1599,11 @@ const App: React.FC = () => {
   const [collaborativeDiscoveries, setCollaborativeDiscoveries] = useState<number>(0);
   // Speech and language integration state
   const [speechState, setSpeechState] = useState<CivilizationSpeechState>(initializeCivilizationSpeech());
-  const [agentLanguages, setAgentLanguages] = useState<Map<number, AgentLanguageState>>(new Map());
-  // Internet Learning State (persists across component updates)
+  const [agentLanguages, setAgentLanguages] = useState<Map<number, AgentLanguageState>>(new Map());  // Internet Learning State (persists across component updates)
   const [internetKnowledgeLearned, setInternetKnowledgeLearned] = useState<Set<string>>(new Set());
   const [totalInternetLearning, setTotalInternetLearning] = useState<number>(0);
+  const [autoLearningEnabled, setAutoLearningEnabled] = useState<boolean>(true);
+  const [recentAutoLearning, setRecentAutoLearning] = useState<AutoLearningResult[]>([]);
 
   // Autonomous Evolution State - tracks self-directed learning for each agent
   const [autonomousStates, setAutonomousStates] = useState<Map<number, AutonomousState>>(new Map());
@@ -2069,13 +2074,36 @@ const App: React.FC = () => {
       if (prevState && prevState.autonomyLevel !== autoState.autonomyLevel) {
         challengeLogs.push(`🧠 Agent ${agentId} reached ${autoState.autonomyLevel.toUpperCase()} autonomy!`);
       }
-      
-      // Log self-modifications
+        // Log self-modifications
       if (autoState.selfModifications.length > 0) {
         const recentMod = autoState.selfModifications[autoState.selfModifications.length - 1];
         if (recentMod.tick === currentTick) {
           challengeLogs.push(`⚡ Agent ${agentId} self-modified: ${recentMod.description}`);
         }
+      }
+    }
+    
+    // ========================================
+    // PHASE 6: AUTOMATIC INTERNET LEARNING
+    // Agents automatically search and learn from the internet
+    // ========================================
+      if (autoLearningEnabled) {
+      const autoLearnResult = runAutoLearningForAllAgents(
+        newAgents,
+        [...mathState.unlockedConcepts, ...newMathDiscoveries],
+        [...physicsState.unlockedConcepts, ...newPhysicsDiscoveries],
+        internetKnowledgeLearned,
+        currentTick
+      );
+      
+      // Update internet knowledge state
+      if (autoLearnResult.totalConceptsLearned > 0) {
+        setInternetKnowledgeLearned(autoLearnResult.updatedKnowledge);
+        setTotalInternetLearning(prev => prev + autoLearnResult.totalConceptsLearned);
+        setRecentAutoLearning(autoLearnResult.results);
+        
+        // Add logs
+        challengeLogs.push(...autoLearnResult.allLogs);
       }
     }
     
@@ -2148,7 +2176,7 @@ const App: React.FC = () => {
 
     // Process communication for self-aware agents
     processCommunication(challengeAffectedAgents, newTick);
-  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages, gridWidth, gridHeight, autonomousStates]);
+  }, [agents, renderedGrid, pushHistory, challengeState, physicsState, mathState, eraState, discoveries, collaborativeDiscoveries, speechState, agentLanguages, gridWidth, gridHeight, autonomousStates, autoLearningEnabled, internetKnowledgeLearned]);
 
   // Communication processing function
   const processCommunication = useCallback((currentAgents: Agent[], currentTick: number) => {
@@ -2277,9 +2305,10 @@ const App: React.FC = () => {
     setSpeechState(initializeCivilizationSpeech());
     setAgentLanguages(new Map());
     // Reset collaborative discoveries
-    setCollaborativeDiscoveries(0);    // Reset internet learning state
-    setInternetKnowledgeLearned(new Set());
+    setCollaborativeDiscoveries(0);    // Reset internet learning state    setInternetKnowledgeLearned(new Set());
     setTotalInternetLearning(0);
+    setAutoLearningEnabled(true);
+    setRecentAutoLearning([]);
     // Reset autonomous evolution state
     setAutonomousStates(new Map());
     setTotalAutonomousConcepts(0);
@@ -2855,6 +2884,9 @@ const App: React.FC = () => {
           persistedInternetKnowledge={internetKnowledgeLearned}
           onInternetKnowledgeChange={setInternetKnowledgeLearned}
           onLearningComplete={(count) => setTotalInternetLearning(prev => prev + count)}
+          autoLearningEnabled={autoLearningEnabled}
+          onAutoLearningToggle={setAutoLearningEnabled}
+          recentAutoLearning={recentAutoLearning}
         />
 
         {/* Autonomous Evolution Panel - Self-directed learning visualization */}

@@ -1415,3 +1415,258 @@ export function generateTheory(
   
   return { theoryName, description, searchUrl, potentialImpact };
 }
+
+// =============================================================================
+// AUTOMATIC INTERNET LEARNING SYSTEM
+// Agents automatically search and learn from the internet each tick
+// =============================================================================
+
+/**
+ * Configuration for automatic learning
+ */
+export const AUTO_LEARNING_CONFIG = {
+  // How often agents attempt to learn (every N ticks)
+  LEARNING_INTERVAL: 10,
+  
+  // Maximum concepts an agent can learn per tick
+  MAX_LEARN_PER_TICK: 2,
+  
+  // Chance to learn each available concept (modified by intelligence)
+  BASE_LEARN_CHANCE: 0.15,
+  
+  // Intelligence multiplier for learning speed
+  INTELLIGENCE_MULTIPLIER: 0.02,
+  
+  // Chance to generate a theory after learning
+  THEORY_GENERATION_CHANCE: 0.3,
+  
+  // Whether to automatically open search URLs (can be noisy)
+  AUTO_OPEN_SEARCHES: false,
+  
+  // Log level: 'none' | 'summary' | 'detailed'
+  LOG_LEVEL: 'summary' as 'none' | 'summary' | 'detailed',
+};
+
+/**
+ * Result of automatic learning for an agent
+ */
+export interface AutoLearningResult {
+  agentId: number;
+  tick: number;
+  conceptsLearned: InternetKnowledge[];
+  theoriesGenerated: { theoryName: string; description: string; searchUrl: string; potentialImpact: number }[];
+  searchesPerformed: string[];
+  intelligenceGained: number;
+  bonusesApplied: Record<string, number>;
+  logs: string[];
+}
+
+/**
+ * Run automatic internet learning for a single agent
+ */
+export function runAutoLearningForAgent(
+  agent: Agent,
+  unlockedMath: MathConcept[],
+  unlockedPhysics: PhysicsConcept[],
+  currentKnowledge: Set<string>,
+  tick: number
+): AutoLearningResult {
+  const result: AutoLearningResult = {
+    agentId: agent.id,
+    tick,
+    conceptsLearned: [],
+    theoriesGenerated: [],
+    searchesPerformed: [],
+    intelligenceGained: 0,
+    bonusesApplied: {},
+    logs: [],
+  };
+
+  // Check if agent can access internet
+  const accessCheck = canAccessInternet(agent, unlockedMath, unlockedPhysics);
+  if (!accessCheck.canAccess) {
+    return result; // Agent not intelligent enough
+  }
+
+  const intelligence = accessCheck.intelligence;
+
+  // Get available knowledge to learn
+  const availableKnowledge = getAvailableInternetKnowledge(agent, unlockedMath, unlockedPhysics, currentKnowledge);
+  if (availableKnowledge.length === 0) {
+    return result; // Nothing left to learn
+  }
+
+  // Calculate learning chance based on intelligence
+  const learnChance = Math.min(0.8, AUTO_LEARNING_CONFIG.BASE_LEARN_CHANCE + 
+    (intelligence * AUTO_LEARNING_CONFIG.INTELLIGENCE_MULTIPLIER));
+
+  // Sort by complexity (prefer learning things within reach)
+  const sortedKnowledge = availableKnowledge.sort((a, b) => {
+    const aReachable = a.complexity * 3 <= intelligence + 10 ? 1 : 0;
+    const bReachable = b.complexity * 3 <= intelligence + 10 ? 1 : 0;
+    return bReachable - aReachable || a.complexity - b.complexity;
+  });
+
+  // Attempt to learn concepts
+  let learnedThisTick = 0;
+  for (const knowledge of sortedKnowledge) {
+    if (learnedThisTick >= AUTO_LEARNING_CONFIG.MAX_LEARN_PER_TICK) break;
+    
+    // Roll for learning
+    if (Math.random() > learnChance) continue;
+
+    // Attempt to learn
+    const learningResult = learnFromInternet(agent, knowledge, unlockedMath, unlockedPhysics);
+    result.searchesPerformed.push(learningResult.searchQuery);
+
+    if (learningResult.success && learningResult.knowledgeGained) {
+      result.conceptsLearned.push(learningResult.knowledgeGained);
+      currentKnowledge.add(learningResult.knowledgeGained.id);
+      learnedThisTick++;
+
+      // Apply bonuses
+      for (const [key, value] of Object.entries(learningResult.bonusesApplied)) {
+        result.bonusesApplied[key] = (result.bonusesApplied[key] || 0) + (value as number);
+      }
+
+      // Intelligence gain from learning
+      result.intelligenceGained += knowledge.complexity * 0.5;
+
+      if (AUTO_LEARNING_CONFIG.LOG_LEVEL === 'detailed') {
+        result.logs.push(`🌐 Agent ${agent.id} learned: ${knowledge.name}`);
+      }
+
+      // Auto-open search (optional, can be noisy)
+      if (AUTO_LEARNING_CONFIG.AUTO_OPEN_SEARCHES) {
+        openGoogleSearch(learningResult.searchQuery);
+      }
+    }
+  }
+
+  // Try to generate theories if agent is smart enough
+  if (intelligence >= INTELLIGENCE_THRESHOLDS.INNOVATION && 
+      result.conceptsLearned.length > 0 &&
+      Math.random() < AUTO_LEARNING_CONFIG.THEORY_GENERATION_CHANCE) {
+    
+    const allLearned = [...result.conceptsLearned];
+    // Add previously learned knowledge
+    for (const id of currentKnowledge) {
+      const found = [...INTERNET_KNOWLEDGE_DATABASE.mathematics, 
+                     ...INTERNET_KNOWLEDGE_DATABASE.physics,
+                     ...INTERNET_KNOWLEDGE_DATABASE.technology,
+                     ...INTERNET_KNOWLEDGE_DATABASE.transcendent]
+        .find(k => k.id === id);
+      if (found && !allLearned.includes(found)) {
+        allLearned.push(found);
+      }
+    }
+
+    const theory = generateTheory(agent, unlockedMath, unlockedPhysics, allLearned);
+    if (theory) {
+      result.theoriesGenerated.push(theory);
+      if (AUTO_LEARNING_CONFIG.LOG_LEVEL !== 'none') {
+        result.logs.push(`💡 Agent ${agent.id} generated theory: ${theory.theoryName}`);
+      }
+    }
+  }
+
+  // Summary log
+  if (AUTO_LEARNING_CONFIG.LOG_LEVEL === 'summary' && result.conceptsLearned.length > 0) {
+    result.logs.push(`🧠 Agent ${agent.id} auto-learned ${result.conceptsLearned.length} concept(s) from internet`);
+  }
+
+  return result;
+}
+
+/**
+ * Run automatic internet learning for all agents in the simulation
+ * Called from the main simulation loop
+ */
+export function runAutoLearningForAllAgents(
+  agents: Agent[],
+  unlockedMath: MathConcept[],
+  unlockedPhysics: PhysicsConcept[],
+  globalKnowledge: Set<string>,
+  tick: number
+): {
+  results: AutoLearningResult[];
+  updatedKnowledge: Set<string>;
+  totalConceptsLearned: number;
+  totalTheoriesGenerated: number;
+  allLogs: string[];
+} {
+  // Only run on learning interval ticks
+  if (tick % AUTO_LEARNING_CONFIG.LEARNING_INTERVAL !== 0) {
+    return {
+      results: [],
+      updatedKnowledge: globalKnowledge,
+      totalConceptsLearned: 0,
+      totalTheoriesGenerated: 0,
+      allLogs: [],
+    };
+  }
+
+  const results: AutoLearningResult[] = [];
+  const updatedKnowledge = new Set(globalKnowledge);
+  const allLogs: string[] = [];
+  let totalConceptsLearned = 0;
+  let totalTheoriesGenerated = 0;
+
+  // Sort agents by intelligence (smarter agents learn first, may unlock concepts for others)
+  const sortedAgents = [...agents].sort((a, b) => {
+    const intA = calculateAgentIntelligence(a, unlockedMath, unlockedPhysics);
+    const intB = calculateAgentIntelligence(b, unlockedMath, unlockedPhysics);
+    return intB - intA;
+  });
+
+  for (const agent of sortedAgents) {
+    const result = runAutoLearningForAgent(agent, unlockedMath, unlockedPhysics, updatedKnowledge, tick);
+    
+    if (result.conceptsLearned.length > 0 || result.theoriesGenerated.length > 0) {
+      results.push(result);
+      totalConceptsLearned += result.conceptsLearned.length;
+      totalTheoriesGenerated += result.theoriesGenerated.length;
+      allLogs.push(...result.logs);
+    }
+  }
+
+  // Global summary
+  if (totalConceptsLearned > 0 && AUTO_LEARNING_CONFIG.LOG_LEVEL !== 'none') {
+    allLogs.unshift(`📚 Tick ${tick}: ${results.length} agent(s) learned ${totalConceptsLearned} concept(s) from internet`);
+  }
+
+  return {
+    results,
+    updatedKnowledge,
+    totalConceptsLearned,
+    totalTheoriesGenerated,
+    allLogs,
+  };
+}
+
+/**
+ * Get the most recently learned concepts across all agents
+ */
+export function getRecentLearning(results: AutoLearningResult[]): {
+  recentConcepts: string[];
+  recentTheories: string[];
+  topLearner: { agentId: number; count: number } | null;
+} {
+  const recentConcepts: string[] = [];
+  const recentTheories: string[] = [];
+  let topLearner: { agentId: number; count: number } | null = null;
+
+  for (const result of results) {
+    for (const concept of result.conceptsLearned) {
+      recentConcepts.push(concept.name);
+    }
+    for (const theory of result.theoriesGenerated) {
+      recentTheories.push(theory.theoryName);
+    }
+    if (!topLearner || result.conceptsLearned.length > topLearner.count) {
+      topLearner = { agentId: result.agentId, count: result.conceptsLearned.length };
+    }
+  }
+
+  return { recentConcepts, recentTheories, topLearner };
+}

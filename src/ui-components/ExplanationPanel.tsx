@@ -46,6 +46,10 @@ interface ExplanationPanelProps {
   persistedInternetKnowledge?: Set<string>;
   onInternetKnowledgeChange?: (knowledge: Set<string>) => void;
   onLearningComplete?: (count: number) => void;
+  // Automatic learning control
+  autoLearningEnabled?: boolean;
+  onAutoLearningToggle?: (enabled: boolean) => void;
+  recentAutoLearning?: { agentId: number; conceptsLearned: { name: string }[]; logs: string[] }[];
 }
 
 const SOPHISTICATION_COLORS: Record<number, string> = {
@@ -69,7 +73,10 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
   selectedAgentId,
   persistedInternetKnowledge,
   onInternetKnowledgeChange,
-  onLearningComplete
+  onLearningComplete,
+  autoLearningEnabled = true,
+  onAutoLearningToggle,
+  recentAutoLearning = []
 }) => {
   const [selectedSubject, setSelectedSubject] = useState<'inventions' | 'physics' | 'math'>('inventions');
   const [explanations, setExplanations] = useState<AgentExplanation[]>([]); // UNLIMITED storage
@@ -324,9 +331,7 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
             </div>
           )}
         </div>
-      )}
-
-      {/* Internet Learning Section */}
+      )}      {/* Internet Learning Section */}
       {agentIntelligence.canAccess && availableInternetKnowledge.length > 0 && (
         <div style={{
           marginBottom: '12px',
@@ -345,6 +350,25 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
               🌐 Internet Learning ({availableInternetKnowledge.length} available)
             </span>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              {/* Automatic Learning Toggle */}
+              <label style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: '4px', 
+                fontSize: '0.8em',
+                background: autoLearningEnabled ? '#4caf50' : '#666',
+                padding: '2px 8px',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}>
+                <input
+                  type="checkbox"
+                  checked={autoLearningEnabled}
+                  onChange={(e) => onAutoLearningToggle?.(e.target.checked)}
+                  style={{ display: 'none' }}
+                />
+                🤖 Auto-Learn: {autoLearningEnabled ? 'ON' : 'OFF'}
+              </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.8em' }}>
                 <input
                   type="checkbox"
@@ -369,6 +393,26 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
               </button>
             </div>
           </div>
+          
+          {/* Recent Auto-Learning Activity */}
+          {recentAutoLearning.length > 0 && (
+            <div style={{
+              marginBottom: '10px',
+              padding: '6px',
+              background: 'rgba(76, 175, 80, 0.2)',
+              borderRadius: '4px',
+              fontSize: '0.8em'
+            }}>
+              <div style={{ color: '#4caf50', fontWeight: 'bold', marginBottom: '4px' }}>
+                📚 Recent Auto-Learning:
+              </div>
+              {recentAutoLearning.slice(0, 3).map((result, idx) => (
+                <div key={idx} style={{ color: '#aaa', marginLeft: '8px' }}>
+                  Agent #{result.agentId}: {result.conceptsLearned.map(c => c.name).join(', ') || 'thinking...'}
+                </div>
+              ))}
+            </div>
+          )}
           
           <div style={{ fontSize: '0.8em', opacity: 0.7, marginBottom: '8px' }}>
             Click to learn from the internet (opens Google search):
