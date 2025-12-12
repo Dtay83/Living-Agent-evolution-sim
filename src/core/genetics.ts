@@ -67,14 +67,13 @@ export function mutateGenes(parent: Genes): Genes {
     CONFIG.genes.mutation.mutationRateEvolveMin,
     CONFIG.genes.mutation.mutationRateEvolveMax
   );
-
-  // Mutate learning & invention genes
+  // Mutate learning & invention genes - UNCAPPED for unlimited evolution
   const curiosity = mutateValue(
     parent.curiosity,
     mutationRate,
     CONFIG.genes.mutation.curiosityMagnitude,
     0.0,
-    1.0
+    Infinity  // NO CAP - curiosity can grow without limit
   );
 
   const social = mutateValue(
@@ -82,7 +81,7 @@ export function mutateGenes(parent: Genes): Genes {
     mutationRate,
     CONFIG.genes.mutation.socialMagnitude,
     0.0,
-    1.0
+    Infinity  // NO CAP - social can grow without limit
   );
 
   const creativity = mutateValue(
@@ -90,7 +89,7 @@ export function mutateGenes(parent: Genes): Genes {
     mutationRate,
     CONFIG.genes.mutation.creativityMagnitude,
     0.0,
-    1.0
+    Infinity  // NO CAP - creativity can grow without limit
   );
 
   const patience = mutateValue(
@@ -98,7 +97,7 @@ export function mutateGenes(parent: Genes): Genes {
     mutationRate,
     CONFIG.genes.mutation.patienceMagnitude,
     0.0,
-    1.0
+    Infinity  // NO CAP - patience can grow without limit
   );
 
   // Sometimes spawn a totally new traitId => random trait generation

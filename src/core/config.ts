@@ -30,7 +30,7 @@ export const CONFIG = {
     exploration: { min: 0.3, max: 0.8 },
     reproductionThreshold: { min: 15, max: 23 },
     mutationRate: { min: 0.08, max: 0.25 },  // Increased for more genetic diversity
-    curiosity: { min: 0.35, max: 0.8 },      // BOOSTED: Higher baseline for consciousness development
+    curiosity: { min: 0.7, max: 1.6 },       // UNCAPPED: Can evolve beyond 1.0 for transcendent curiosity
     social: { min: 0.3, max: 0.9 },
     creativity: { min: 0.25, max: 0.8 },     // Boosted minimum for baseline creativity
     patience: { min: 0.2, max: 0.8 },
@@ -39,7 +39,7 @@ export const CONFIG = {
       explorationMagnitude: 0.2,
       reproductionThresholdMagnitude: 3,
       mutationRateMagnitude: 0.08,           // Increased mutation magnitude
-      curiosityMagnitude: 0.15,
+      curiosityMagnitude: 0.30,              // DOUBLED: 2x mutation magnitude for curiosity
       socialMagnitude: 0.15,
       creativityMagnitude: 0.18,             // Slightly higher creativity mutations
       patienceMagnitude: 0.15,
