@@ -2454,12 +2454,11 @@ const App: React.FC = () => {
       }
     }
   };
-
   return (
     <div
       style={{
         display: "flex",
-        height: "100vh",
+        minHeight: "100vh",
         fontFamily: "system-ui, sans-serif",
         background: "#050814",
         color: "#f4f4f4",
@@ -2685,10 +2684,8 @@ const App: React.FC = () => {
             </div>
           )}
         </div>
-      </div>
-
-      {/* RIGHT: Side panel */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      </div>      {/* RIGHT: Side panel */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
         {/* Statistics Display */}
         <div
           style={{

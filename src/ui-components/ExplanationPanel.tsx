@@ -417,13 +417,13 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
           <div style={{ fontSize: '0.8em', opacity: 0.7, marginBottom: '8px' }}>
             Click to learn from the internet (opens Google search):
           </div>
-          
-          <div style={{ 
+            <div style={{ 
             display: 'flex', 
             flexWrap: 'wrap', 
             gap: '6px',
-            maxHeight: '120px',
-            overflowY: 'auto'
+            maxHeight: '180px',
+            overflowY: 'auto',
+            padding: '4px'
           }}>
             {availableInternetKnowledge.map((knowledge) => (
               <button
@@ -467,12 +467,11 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
           background: '#1a0a2a',
           borderRadius: '6px',
           border: '1px solid #9c27b0'
-        }}>
-          <div style={{ fontWeight: 'bold', color: '#ce93d8', marginBottom: '8px' }}>
+        }}>          <div style={{ fontWeight: 'bold', color: '#ce93d8', marginBottom: '8px' }}>
             💡 Generated Theories ({theories.length})
           </div>
-          <div style={{ maxHeight: '100px', overflowY: 'auto' }}>
-            {theories.slice(0, 3).map((theory, idx) => (
+          <div style={{ maxHeight: '150px', overflowY: 'auto' }}>
+            {theories.slice(0, 5).map((theory, idx) => (
               <div key={idx} style={{ 
                 marginBottom: '6px', 
                 padding: '6px', 
@@ -503,9 +502,7 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
             ))}
           </div>
         </div>
-      )}
-
-      {/* Learning Results Log */}
+      )}      {/* Learning Results Log */}
       {learningResults.length > 0 && (
         <div style={{
           marginBottom: '12px',
@@ -513,13 +510,13 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
           background: '#0a1a1a',
           borderRadius: '6px',
           border: '1px solid #00bcd4',
-          maxHeight: '150px',
+          maxHeight: '200px',
           overflowY: 'auto'
         }}>
           <div style={{ fontWeight: 'bold', color: '#4dd0e1', marginBottom: '8px' }}>
             📚 Learning Log ({learningResults.length})
           </div>
-          {learningResults.slice(0, 5).map((result, idx) => (
+          {learningResults.slice(0, 10).map((result, idx) => (
             <div key={idx} style={{
               marginBottom: '6px',
               padding: '6px',
@@ -654,13 +651,13 @@ export const ExplanationPanel: React.FC<ExplanationPanelProps> = ({
         <div style={{ marginBottom: '12px' }}>
           <div style={{ fontSize: '0.8em', opacity: 0.8, marginBottom: '6px' }}>
             Click to generate explanation:
-          </div>
-          <div style={{ 
+          </div>          <div style={{ 
             display: 'flex', 
             flexWrap: 'wrap', 
             gap: '6px',
-            maxHeight: '80px',
-            overflowY: 'auto'
+            maxHeight: '120px',
+            overflowY: 'auto',
+            padding: '4px'
           }}>
             {availableItems.map((item: any) => (
               <button

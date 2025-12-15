@@ -138,12 +138,11 @@ export const PhysicsPanel: React.FC<PhysicsPanelProps> = ({
         <div>
           <div style={{ fontSize: '0.85em', marginBottom: '6px', opacity: 0.9 }}>
             <strong>Recent Discoveries:</strong>
-          </div>
-          <ul style={{ 
+          </div>          <ul style={{ 
             margin: 0, 
             paddingLeft: '18px', 
             fontSize: '0.8em',
-            maxHeight: '120px',
+            maxHeight: '200px',
             overflowY: 'auto'
           }}>
             {recentDiscoveries.map(concept => (

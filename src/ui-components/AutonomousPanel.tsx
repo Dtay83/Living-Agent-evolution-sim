@@ -72,7 +72,6 @@ export function AutonomousPanel({
     transcendent: autonomousAgents.filter(a => a.autonomyLevel === 'transcendent').length,
     singularity: autonomousAgents.filter(a => a.autonomyLevel === 'singularity').length,
   };
-
   return (
     <div style={{
       background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
@@ -81,8 +80,7 @@ export function AutonomousPanel({
       color: '#fff',
       fontFamily: 'monospace',
       fontSize: '12px',
-      maxHeight: '500px',
-      overflowY: 'auto',
+      marginBottom: '12px',
     }}>
       <h3 style={{ 
         margin: '0 0 12px 0', 
@@ -151,15 +149,15 @@ export function AutonomousPanel({
         <div style={{ marginBottom: '16px' }}>
           <div style={{ color: '#aaa', marginBottom: '8px' }}>
             Self-Directed Agents ({autonomousAgents.length}):
-          </div>
-          <div style={{ 
+          </div>          <div style={{ 
             display: 'flex', 
             flexWrap: 'wrap', 
             gap: '6px',
-            maxHeight: '80px',
-            overflowY: 'auto'
+            maxHeight: '120px',
+            overflowY: 'auto',
+            padding: '4px'
           }}>
-            {autonomousAgents.slice(0, 20).map(state => (
+            {autonomousAgents.slice(0, 30).map(state => (
               <button
                 key={state.agentId}
                 onClick={() => setSelectedAgentId(
@@ -179,10 +177,9 @@ export function AutonomousPanel({
               >
                 {LEVEL_EMOJIS[state.autonomyLevel]} #{state.agentId}
               </button>
-            ))}
-            {autonomousAgents.length > 20 && (
+            ))}            {autonomousAgents.length > 30 && (
               <span style={{ color: '#888', alignSelf: 'center' }}>
-                +{autonomousAgents.length - 20} more
+                +{autonomousAgents.length - 30} more
               </span>
             )}
           </div>
@@ -492,12 +489,12 @@ function ExpandableSection({
           <span>{count}</span>
           <span>{isOpen ? '▼' : '▶'}</span>
         </span>
-      </button>
-      {isOpen && count > 0 && (
+      </button>      {isOpen && count > 0 && (
         <div style={{ 
           marginTop: '4px',
-          maxHeight: '120px',
-          overflowY: 'auto'
+          maxHeight: '200px',
+          overflowY: 'auto',
+          padding: '4px'
         }}>
           {children}
         </div>

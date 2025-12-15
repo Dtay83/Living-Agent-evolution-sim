@@ -257,13 +257,12 @@ export const SpeechPanel: React.FC<SpeechPanelProps> = ({
       <div style={{ marginTop: '12px' }}>
         <div style={{ fontSize: '0.85em', marginBottom: '6px', opacity: 0.9 }}>
           <strong>Shared Vocabulary Sample:</strong>
-        </div>
-        <div style={{ 
+        </div>        <div style={{ 
           display: 'flex', 
           gap: '4px', 
           flexWrap: 'wrap',
-          maxHeight: '60px',
-          overflow: 'hidden'
+          maxHeight: '100px',
+          overflowY: 'auto'
         }}>
           {speechState.sharedVocabulary.slice(0, 15).map((word, idx) => (
             <span
