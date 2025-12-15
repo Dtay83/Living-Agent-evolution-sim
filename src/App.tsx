@@ -2893,32 +2893,31 @@ const App: React.FC = () => {
           totalBehaviors={totalAutonomousBehaviors}
           mostAutonomous={mostAutonomousAgent}
           tick={tick}
-        />
-
-        {/* Log */}
+        />        {/* Log */}
         <div
           style={{
-            flex: 1,
             padding: "10px",
             background: "#151a30",
             borderRadius: "8px",
             border: "1px solid #333",
-            overflowY: "auto"
+            maxHeight: "300px",
+            overflowY: "auto",
+            marginBottom: "12px"
           }}
-        >          <h3>Action Log</h3>
+        >          <h3 style={{ margin: "0 0 8px 0", position: "sticky", top: 0, background: "#151a30", paddingBottom: "4px" }}>Action Log</h3>
           {log.length === 0 ? (
             <p>No steps yet. Press "Step" or "Play" to advance the world.</p>
           ) : (
-            <ul style={{ paddingLeft: "18px" }}>
+            <ul style={{ paddingLeft: "18px", margin: 0 }}>
               {log.map((entry, i) => (
-                <li key={i} style={{ fontSize: "0.8em" }}>
+                <li key={i} style={{ fontSize: "0.8em", marginBottom: "2px" }}>
                   {entry}
                 </li>
               ))}
             </ul>
           )}
         </div>
-      </div>      {/* Chat Panel for Agent Communications */}
+      </div>{/* Chat Panel for Agent Communications */}
       <ChatPanel
         communicationLog={communicationLog}
         isOpen={chatOpen}
