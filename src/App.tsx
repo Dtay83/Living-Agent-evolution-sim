@@ -1,8 +1,8 @@
 ﻿// Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { getBackendHealth, type BackendHealth } from "./backendClient";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
-
 interface Genes {
   foodPreference: number;        // 0–1: prioritize food when hungry
   exploration: number;           // 0–1: how often they wander
@@ -531,12 +531,12 @@ function decideMove(
 ): { dir: Direction; rule: string; action: Direction } {
   const { x, y, energy, genes } = agent;
 
-  const neighbors: { x: number; y: number; dir: Direction }[] = [
+  const neighbors = ([
     { x, y: y - 1, dir: "up" },
     { x, y: y + 1, dir: "down" },
     { x: x - 1, y, dir: "left" },
     { x: x + 1, y, dir: "right" }
-  ].filter(
+  ] as { x: number; y: number; dir: Direction }[]).filter(
     p => p.x >= 0 && p.x < GRID_WIDTH && p.y >= 0 && p.y < GRID_HEIGHT
   );
 
@@ -1149,7 +1149,7 @@ const App: React.FC = () => {
   }, [agents]);
 
   const renderedGrid = useMemo(() => {
-    const copy = grid.map(row => row.map(cell => ({ ...cell, agentId: undefined })));
+    const copy: Cell[][] = grid.map(row => row.map(cell => ({ ...cell, agentId: undefined })));
     for (const agent of agents) {
       if (
         agent.x >= 0 &&

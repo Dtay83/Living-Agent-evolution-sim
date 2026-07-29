@@ -2,7 +2,7 @@
 name = "living-agent-evolution-v2"
 version = "0.2.0"
 description = "Living Agent Evolution Sim v2 backend"
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.30",
