@@ -1,6 +1,13 @@
 ﻿// Contact: Name: dtay83 <dartey.banahene@gmail.com>
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { getBackendHealth, type BackendHealth } from "./backendClient";
+import {
+  getBackendHealth,
+  resolveSessionWorld,
+  tickWorld,
+  forgetSessionWorld,
+  type BackendHealth,
+  type BackendWorld,
+} from "./backendClient";
 
 type Direction = "up" | "down" | "left" | "right" | "stay";
 interface Genes {
@@ -1130,9 +1137,37 @@ const App: React.FC = () => {
   const [discoveries, setDiscoveries] = useState<DiscoveryEvent[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [speedMs, setSpeedMs] = useState(400);
-  const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);
-  const [showStartupModal, setShowStartupModal] = useState(true);
+  const [watchedTraitId, setWatchedTraitId] = useState<number | null>(null);  const [showStartupModal, setShowStartupModal] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Backend integration: the FastAPI service is the authoritative world engine.
+  const [backendHealth, setBackendHealth] = useState<BackendHealth | null>(null);
+  const [backendWorld, setBackendWorld] = useState<BackendWorld | null>(null);
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [backendBusy, setBackendBusy] = useState(false);
+
+  const connectBackend = useCallback(async () => {
+    setBackendError(null);
+    try {
+      const health = await getBackendHealth();
+      setBackendHealth(health);
+      const world = await resolveSessionWorld(
+        Math.floor(Math.random() * 100000),
+        INITIAL_AGENTS
+      );
+      setBackendWorld(world);
+    } catch (error) {
+      setBackendHealth(null);
+      setBackendWorld(null);
+      setBackendError(
+        error instanceof Error ? error.message : "Unable to reach backend"
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    void connectBackend();
+  }, [connectBackend]);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const tickRef = useRef(0);
@@ -1180,23 +1215,47 @@ const App: React.FC = () => {
     };
     setHistory(prev => [...prev, point].slice(-60));
   }, []);
+  const handleStep = useCallback(async () => {
+    // The backend owns the authoritative tick; the local grid is the view layer.
+    if (!backendWorld || backendBusy) return;
+    setBackendBusy(true);
+    try {
+      const advanced = await tickWorld(backendWorld.world_id, 1);
+      setBackendWorld(advanced);
+      setBackendError(null);
 
-  const handleStep = useCallback(() => {
-    const { agents: newAgents, grid: newGrid, log: newLog, discoveries: newDiscoveries } = stepWorld(
-      agents,
-      renderedGrid,
-      tickRef.current
-    );
-    const newTick = tickRef.current + 1;
-    setTick(newTick);
-    setAgents(newAgents);
-    setGrid(newGrid);
-    setLog(prev => [...newLog, ...prev].slice(0, 80));
-    setDiscoveries(prev => [...prev, ...newDiscoveries]);
-    pushHistory(newAgents, newTick);
-  }, [agents, renderedGrid, pushHistory]);
+      const {
+        agents: newAgents,
+        grid: newGrid,
+        log: newLog,
+        discoveries: newDiscoveries,
+      } = stepWorld(agents, renderedGrid, tickRef.current);
 
-  const handleReset = () => {
+      setTick(advanced.tick);
+      setAgents(newAgents);
+      setGrid(newGrid);
+      setLog(prev =>
+        [
+          `Backend tick ${advanced.tick}: entropy=${advanced.metrics.entropy.toFixed(
+            3
+          )}, novelty=${advanced.metrics.novelty.toFixed(3)}`,
+          ...newLog,
+          ...prev,
+        ].slice(0, 80)
+      );
+      setDiscoveries(prev => [...prev, ...newDiscoveries]);
+      pushHistory(newAgents, advanced.tick);
+    } catch (error) {
+      setBackendError(
+        error instanceof Error ? error.message : "Backend tick failed"
+      );
+      setIsRunning(false);
+    } finally {
+      setBackendBusy(false);
+    }
+  }, [agents, renderedGrid, pushHistory, backendWorld, backendBusy]);
+
+  const handleReset = useCallback(async () => {
     const { grid: newGrid, agents: newAgents } = initializeWorld();
     setGrid(newGrid);
     setAgents(newAgents);
@@ -1207,7 +1266,9 @@ const App: React.FC = () => {
     setDiscoveries([]);
     setIsRunning(false);
     setWatchedTraitId(null);
-  };
+    forgetSessionWorld();
+    await connectBackend();
+  }, [connectBackend]);
 
   // Auto-run interval
   useEffect(() => {
@@ -1459,14 +1520,17 @@ const App: React.FC = () => {
               );
             })
           )}
-        </div>
-
-        <div style={{ marginTop: "12px" }}>
-          <button onClick={handleStep} style={{ marginRight: "8px" }}>
+        </div>        <div style={{ marginTop: "12px" }}>
+          <button
+            onClick={handleStep}
+            disabled={!backendWorld || backendBusy}
+            style={{ marginRight: "8px" }}
+          >
             Step
           </button>
           <button
             onClick={() => setIsRunning(r => !r)}
+            disabled={!backendWorld}
             style={{ marginRight: "8px" }}
           >
             {isRunning ? "Pause" : "Play"}
@@ -1510,8 +1574,42 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* RIGHT: Side panel */}
-      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+      {/* RIGHT: Side panel */}      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        {/* Backend status */}
+        <div
+          style={{
+            marginBottom: "12px",
+            padding: "10px",
+            background: backendError ? "#3a1420" : "#151a30",
+            borderRadius: "8px",
+            border: `1px solid ${backendError ? "#8b2540" : "#333"}`,
+            fontSize: "0.85em",
+          }}
+        >
+          <h3 style={{ margin: "0 0 6px" }}>Backend Engine</h3>
+          {backendError ? (
+            <>
+              <p style={{ margin: 0 }}>Disconnected: {backendError}</p>
+              <button onClick={() => void connectBackend()} style={{ marginTop: 6 }}>
+                Retry connection
+              </button>
+            </>
+          ) : backendWorld ? (
+            <p style={{ margin: 0 }}>
+              Connected to {backendHealth?.service} · world{" "}
+              <code>{backendWorld.world_id}</code> · tick {backendWorld.tick} ·{" "}
+              {backendWorld.agents.length} agents
+              <br />
+              entropy {backendWorld.metrics.entropy.toFixed(3)} · novelty{" "}
+              {backendWorld.metrics.novelty.toFixed(3)} · pressure{" "}
+              {backendWorld.metrics.information_pressure.toFixed(3)} · accepted
+              discoveries {backendWorld.accepted_discoveries.length}
+            </p>
+          ) : (
+            <p style={{ margin: 0 }}>Connecting…</p>
+          )}
+        </div>
+
         {/* Statistics Display */}
         <div
           style={{

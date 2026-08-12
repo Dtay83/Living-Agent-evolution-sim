@@ -4,9 +4,10 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from . import __version__
-from .config import Settings, load_settings
+from .config import load_settings
 from .discovery import arbitrate_hypothesis
 from .engine import advance_world, create_world
 from .models import (
@@ -35,6 +36,14 @@ app = FastAPI(
     title="Living Agent Evolution Sim v2",
     version=__version__,
     lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

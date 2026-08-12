@@ -1,9 +1,10 @@
 {
   "name": "living-agent-evolution-sim",
   "version": "0.0.0",
-  "private": true,
-  "scripts": {
+  "private": true,  "scripts": {
+    "start": "node scripts/start.mjs",
     "dev": "vite",
+    "dev:backend": "node scripts/start-backend.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -12,6 +13,7 @@
     "react-dom": "18.2.0"
   },
   "devDependencies": {
+    "@types/node": "^20.11.30",
     "@types/react": "18.2.21",
     "@types/react-dom": "18.2.7",
     "@vitejs/plugin-react": "^5.0.0",
