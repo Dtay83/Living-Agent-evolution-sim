@@ -1,98 +1,114 @@
 from __future__ import annotations
 
-from enum import StrEnum
-from pydantic import BaseModel, Field
+from datetime import datetime, timezone
+from typing import Annotated, Literal
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class Terrain(StrEnum):
-    PLAIN = "plain"
-    RESOURCE = "resource"
-    HAZARD = "hazard"
+UnitFloat = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
-class DiscoveryStatus(StrEnum):
-    PROPOSED = "proposed"
-    ACCEPTED = "accepted"
-    REJECTED = "rejected"
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-class GenomeV2(BaseModel):
-    curiosity: float = Field(ge=0, le=1)
-    compression_bias: float = Field(ge=0, le=1)
-    symbolic_precision: float = Field(ge=0, le=1)
-    sociality: float = Field(ge=0, le=1)
-    mutation_rate: float = Field(ge=0, le=1)
-    energy_efficiency: float = Field(ge=0, le=1)
+class Genome(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    curiosity: UnitFloat = 0.60
+    compression_bias: UnitFloat = 0.55
+    symbolic_precision: UnitFloat = 0.70
+    sociality: UnitFloat = 0.50
+    mutation_rate: UnitFloat = 0.05
+    energy_efficiency: UnitFloat = 0.65
 
 
-class AgentMemoryRef(BaseModel):
-    memory_id: str
-    concept_type: str
+class AgentState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class AgentV2(BaseModel):
-    id: str
-    x: int = Field(ge=0)
-    y: int = Field(ge=0)
-    energy: float = Field(ge=0)
-    generation: int = Field(ge=0)
-    genome: GenomeV2
-    accepted_discovery_ids: list[str] = Field(default_factory=list)
-    memories: list[AgentMemoryRef] = Field(default_factory=list)
-
-
-class CellV2(BaseModel):
-    terrain: Terrain = Terrain.PLAIN
-    information_density: float = Field(default=0.0, ge=0)
-    resource: float = Field(default=0.0, ge=0)
-
-
-class Discovery(BaseModel):
-    id: str
     agent_id: str
-    tick: int = Field(ge=0)
-    hypothesis: str
-    status: DiscoveryStatus
-    feedback: str
-    residual: float | None = None
+    energy: Annotated[float, Field(ge=0.0)] = 100.0
+    age: Annotated[int, Field(ge=0)] = 0
+    genome: Genome = Field(default_factory=Genome)
 
 
 class InfodynamicMetrics(BaseModel):
-    entropy: float
+    model_config = ConfigDict(extra="forbid")
+
+    entropy: Annotated[float, Field(ge=0.0)]
     compression_delta: float
-    novelty: float
-    information_pressure: float
+    novelty: UnitFloat
+    information_pressure: Annotated[float, Field(ge=0.0)]
 
 
-class WorldV2(BaseModel):
-    id: str
-    seed: int
-    tick: int = Field(default=0, ge=0)
-    width: int = Field(ge=2)
-    height: int = Field(ge=2)
-    agents: list[AgentV2]
-    grid: list[list[CellV2]]
-    discoveries: list[Discovery] = Field(default_factory=list)
-    metrics: InfodynamicMetrics
+class Discovery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class CreateWorldRequest(BaseModel):
-    seed: int = 7
-    width: int = Field(default=16, ge=2, le=100)
-    height: int = Field(default=10, ge=2, le=100)
-    agent_count: int = Field(default=6, ge=1, le=500)
-
-
-class TickRequest(BaseModel):
-    steps: int = Field(default=1, ge=1, le=500)
-
-
-class ArbitrationRequest(BaseModel):
-    hypothesis: str = Field(min_length=1)
-
-
-class ArbitrationResult(BaseModel):
+    discovery_id: str = Field(default_factory=lambda: str(uuid4()))
+    world_id: str
+    tick: Annotated[int, Field(ge=0)]
+    hypothesis: str
     valid: bool
     feedback: str
     residual: float | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class WorldState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    world_id: str
+    seed: int
+    tick: Annotated[int, Field(ge=0)] = 0
+    agents: list[AgentState]
+    metrics: InfodynamicMetrics
+    accepted_discoveries: list[Discovery] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class CreateWorldRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    world_id: str | None = Field(default=None, min_length=1, max_length=64)
+    seed: int = 1
+    agent_count: Annotated[int, Field(ge=1, le=500)] = 12
+
+    @field_validator("world_id")
+    @classmethod
+    def validate_world_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not all(character.isalnum() or character in "-_" for character in value):
+            raise ValueError("world_id may contain only letters, digits, '-' and '_'")
+        return value
+
+
+class TickRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: Annotated[int, Field(ge=1, le=100)] = 1
+
+
+class ArbitrationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    hypothesis: str = Field(min_length=1, max_length=1000)
+
+
+class ArbitrationResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool
+    feedback: str
+    residual: float | None
+
+
+class QuantumValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    circuit: str = Field(min_length=1, max_length=10_000)
+    provider: Literal["ibm"] = "ibm"
 

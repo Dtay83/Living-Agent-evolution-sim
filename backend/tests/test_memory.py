@@ -1,15 +1,16 @@
-from living_agent_v2.memory import MemoryStore, embed_text
+from living_agent_v2.memory import cosine_similarity, embed_text
 
 
-def test_embedding_is_deterministic():
-    assert embed_text("energy equals mass") == embed_text("energy equals mass")
+def test_embeddings_are_deterministic_and_normalized() -> None:
+    first = embed_text("symbolic energy discovery")
+    second = embed_text("symbolic energy discovery")
+
+    assert first == second
+    assert cosine_similarity(first, second) == 1.0
 
 
-def test_memory_search_returns_stored_record():
-    store = MemoryStore()
-    record = store.add("agent-1", "accepted", "energy equals 500")
+def test_empty_embedding_has_zero_similarity() -> None:
+    empty = embed_text("")
 
-    results = store.search("energy equals 500", limit=1)
-
-    assert results[0].id == record.id
+    assert cosine_similarity(empty, empty) == 0.0
 

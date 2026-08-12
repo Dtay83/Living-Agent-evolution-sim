@@ -2,70 +2,47 @@ from __future__ import annotations
 
 import hashlib
 import math
-import uuid
+import re
 from dataclasses import dataclass
 
 
-VECTOR_SIZE = 384
+TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
-@dataclass(frozen=True)
-class MemoryRecord:
-    id: str
-    agent_id: str
-    concept_type: str
-    vector: tuple[float, ...]
-    raw_text: str | None
+def embed_text(text: str, dimensions: int = 64) -> list[float]:
+    """Create a deterministic local feature-hash embedding.
 
+    This is intentionally a lexical bootstrap vectorizer, not a semantic model.
+    """
+    if dimensions < 8:
+        raise ValueError("dimensions must be at least 8")
 
-class MemoryStore:
-    def __init__(self, keep_raw_text: bool = True):
-        self.keep_raw_text = keep_raw_text
-        self._records: dict[str, MemoryRecord] = {}
-
-    def add(self, agent_id: str, concept_type: str, text: str) -> MemoryRecord:
-        record = MemoryRecord(
-            id=str(uuid.uuid4()),
-            agent_id=agent_id,
-            concept_type=concept_type,
-            vector=tuple(embed_text(text)),
-            raw_text=text if self.keep_raw_text else None,
-        )
-        self._records[record.id] = record
-        return record
-
-    def search(self, text: str, limit: int = 5) -> list[MemoryRecord]:
-        query = embed_text(text)
-        scored = sorted(
-            self._records.values(),
-            key=lambda record: cosine_similarity(query, record.vector),
-            reverse=True,
-        )
-        return scored[:limit]
-
-    def get(self, memory_id: str) -> MemoryRecord | None:
-        return self._records.get(memory_id)
-
-
-def embed_text(text: str) -> list[float]:
-    vector = [0.0] * VECTOR_SIZE
-    for token in text.lower().split():
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
-        index = int.from_bytes(digest[:4], "big") % VECTOR_SIZE
-        sign = 1.0 if digest[4] % 2 == 0 else -1.0
+    vector = [0.0] * dimensions
+    for token in TOKEN_PATTERN.findall(text.casefold()):
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=16).digest()
+        index = int.from_bytes(digest[:8], "big") % dimensions
+        sign = 1.0 if digest[8] & 1 else -1.0
         vector[index] += sign
 
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm == 0:
+    magnitude = math.sqrt(sum(value * value for value in vector))
+    if magnitude == 0:
         return vector
-    return [value / norm for value in vector]
+    return [value / magnitude for value in vector]
 
 
-def cosine_similarity(a: list[float] | tuple[float, ...], b: list[float] | tuple[float, ...]) -> float:
-    numerator = sum(left * right for left, right in zip(a, b))
-    a_norm = math.sqrt(sum(value * value for value in a))
-    b_norm = math.sqrt(sum(value * value for value in b))
-    if a_norm == 0 or b_norm == 0:
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("vectors must have equal dimensions")
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm == 0 or right_norm == 0:
         return 0.0
-    return numerator / (a_norm * b_norm)
+    return sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryMatch:
+    memory_id: str
+    content: str
+    score: float
 

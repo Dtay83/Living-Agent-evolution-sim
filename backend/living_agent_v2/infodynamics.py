@@ -1,70 +1,53 @@
 from __future__ import annotations
 
 import math
+import zlib
+from collections import Counter
 
-from .models import AgentV2, CellV2, InfodynamicMetrics
+from .models import InfodynamicMetrics
 
 
-def calculate_metrics(grid: list[list[CellV2]], agents: list[AgentV2]) -> InfodynamicMetrics:
-    densities = [cell.information_density for row in grid for cell in row]
-    resources = [cell.resource for row in grid for cell in row]
-    energies = [agent.energy for agent in agents]
-
-    entropy = _normalized_entropy(densities + resources + energies)
-    compression_target = _compression_target(agents)
-    compression_delta = max(0.0, entropy - compression_target)
-    novelty = _novelty_score(grid, agents)
-    information_pressure = compression_delta + novelty
-
-    return InfodynamicMetrics(
-        entropy=round(entropy, 6),
-        compression_delta=round(compression_delta, 6),
-        novelty=round(novelty, 6),
-        information_pressure=round(information_pressure, 6),
+def shannon_entropy(values: list[int]) -> float:
+    if not values:
+        return 0.0
+    counts = Counter(values)
+    length = len(values)
+    return -sum(
+        (count / length) * math.log2(count / length) for count in counts.values()
     )
 
 
-def evolve_cell(cell: CellV2, local_pressure: float) -> CellV2:
-    density = max(0.0, cell.information_density * (1.0 - min(local_pressure, 0.2)))
-    resource = max(0.0, cell.resource * 0.98)
-    return cell.model_copy(update={"information_density": density, "resource": resource})
-
-
-def movement_cost(agent: AgentV2, pressure: float) -> float:
-    compression_discount = 0.35 * agent.genome.compression_bias
-    efficiency_discount = 0.35 * agent.genome.energy_efficiency
-    base_cost = 1.0 + pressure
-    return max(0.15, base_cost * (1.0 - compression_discount - efficiency_discount))
-
-
-def _normalized_entropy(values: list[float]) -> float:
-    total = sum(max(0.0, value) for value in values)
-    if total <= 0:
+def compression_ratio(payload: bytes) -> float:
+    if not payload:
         return 0.0
-
-    entropy = 0.0
-    for value in values:
-        if value <= 0:
-            continue
-        probability = value / total
-        entropy -= probability * math.log2(probability)
-
-    max_entropy = math.log2(len(values)) if values else 1.0
-    if max_entropy == 0:
-        return 0.0
-    return entropy / max_entropy
+    return len(zlib.compress(payload, level=9)) / len(payload)
 
 
-def _compression_target(agents: list[AgentV2]) -> float:
-    if not agents:
-        return 0.0
-    avg_bias = sum(agent.genome.compression_bias for agent in agents) / len(agents)
-    return 0.8 - (avg_bias * 0.35)
+def calculate_metrics(
+    current_values: list[int], previous_values: list[int] | None = None
+) -> InfodynamicMetrics:
+    current_payload = bytes(current_values)
+    entropy = shannon_entropy(current_values)
+    current_ratio = compression_ratio(current_payload)
+    previous_ratio = compression_ratio(bytes(previous_values or []))
+    compression_delta = current_ratio - previous_ratio if previous_values else 0.0
 
+    if previous_values:
+        compared = min(len(current_values), len(previous_values))
+        changed = sum(
+            current_values[index] != previous_values[index]
+            for index in range(compared)
+        )
+        changed += abs(len(current_values) - len(previous_values))
+        novelty = changed / max(len(current_values), len(previous_values), 1)
+    else:
+        novelty = 0.0
 
-def _novelty_score(grid: list[list[CellV2]], agents: list[AgentV2]) -> float:
-    occupied = {(agent.x, agent.y) for agent in agents}
-    density_cells = sum(1 for row in grid for cell in row if cell.information_density > 0.35)
-    denominator = max(1, len(grid) * len(grid[0]))
-    return min(1.0, (len(occupied) / denominator) + (density_cells / denominator))
+    information_pressure = max(0.0, entropy * (1.0 + novelty) * current_ratio)
+    return InfodynamicMetrics(
+        entropy=entropy,
+        compression_delta=compression_delta,
+        novelty=novelty,
+        information_pressure=information_pressure,
+    )
 
