@@ -33,3 +33,21 @@ def test_validated_discovery_is_recorded_on_fifth_tick() -> None:
     assert discoveries[0].valid is True
     assert updated.accepted_discoveries == discoveries
 
+
+def test_population_survives_and_reproduces_long_term() -> None:
+    world = create_world(CreateWorldRequest(world_id="test", seed=7, agent_count=8))
+
+    updated, _ = advance_world(world, 100)
+
+    assert len(updated.agents) >= 4, "population must never go extinct"
+    # Reproduction should introduce agents born after the founding generation.
+    assert any(agent.age < updated.tick for agent in updated.agents)
+
+
+def test_population_stays_within_hard_cap() -> None:
+    world = create_world(CreateWorldRequest(world_id="test", seed=11, agent_count=50))
+
+    updated, _ = advance_world(world, 100)
+
+    assert len(updated.agents) <= 200
+
