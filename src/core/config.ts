@@ -10,14 +10,18 @@ export const CONFIG = {
     maxWidth: 50,         // Maximum grid width before performance issues
     maxHeight: 30,        // Maximum grid height
     expandBy: 2,          // Number of cells to add when expanding
-  },
-  simulation: {
+  },  simulation: {
     initialAgents: 6,
-    initialFood: 18,
-    foodSpawnChance: 0.6,
-    foodSpawnCount: 1,
-    baseEnergyCost: 1,
-    foodEnergyBonus: 5,
+    initialFood: 24,
+    // Food is spawned every tick; the amount scales with population so the
+    // ecosystem can actually sustain the agents it produces.
+    foodSpawnChance: 1.0,
+    foodSpawnCount: 2,
+    foodPerAgent: 0.35,        // extra food per living agent, per tick
+    maxFoodOnGrid: 0.35,       // cap food at 35% of the cells
+    minPopulation: 4,          // reseed floor so the world never flatlines
+    baseEnergyCost: 0.5,       // metabolism is cheaper -> longer life course
+    foodEnergyBonus: 8,
     reproductionReward: 2,
     deathPenalty: 5,
   },
@@ -80,8 +84,8 @@ export function setGridDimensions(width: number, height: number) {
   GRID_WIDTH = width;
   GRID_HEIGHT = height;
 }
-export const INITIAL_AGENTS = CONFIG.simulation.initialAgents;
-export const INITIAL_FOOD = CONFIG.simulation.initialFood;
-export const ALPHA = CONFIG.rl.alpha;
-export const GAMMA = CONFIG.rl.gamma;
-export const EPSILON = CONFIG.rl.epsilon;
+export const INITIAL_AGENTS: number = CONFIG.simulation.initialAgents;
+export const INITIAL_FOOD: number = CONFIG.simulation.initialFood;
+export const ALPHA: number = CONFIG.rl.alpha;
+export const GAMMA: number = CONFIG.rl.gamma;
+export const EPSILON: number = CONFIG.rl.epsilon;

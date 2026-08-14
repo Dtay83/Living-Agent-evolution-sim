@@ -292,14 +292,43 @@ export function stepWorld(
       );
     }
   }
+  // Food spawning: scale with population so the ecosystem can sustain growth.
+  const gridArea = (newGrid[0]?.length || 1) * newGrid.length;
+  const foodOnGrid = newGrid.reduce(
+    (sum, row) => sum + row.filter(c => c.food).length,
+    0
+  );
+  const foodCap = Math.floor(gridArea * CONFIG.simulation.maxFoodOnGrid);
+  const desiredSpawn = Math.ceil(
+    CONFIG.simulation.foodSpawnCount +
+      updatedAgents.length * CONFIG.simulation.foodPerAgent
+  );
+  const spawnCount = Math.max(0, Math.min(desiredSpawn, foodCap - foodOnGrid));
 
-  // Food spawning with proper grid assignment
-  if (Math.random() < CONFIG.simulation.foodSpawnChance) {
-    const gridWithFood = placeRandomFood(newGrid, CONFIG.simulation.foodSpawnCount);
-    return { agents: updatedAgents, grid: gridWithFood, log: logs, discoveries, gridExpanded };
+  let finalGrid = newGrid;
+  if (spawnCount > 0) {
+    finalGrid = placeRandomFood(newGrid, spawnCount);
   }
 
-  return { agents: updatedAgents, grid: newGrid, log: logs, discoveries, gridExpanded };
+  // Extinction floor: reseed founders so the simulation keeps running.
+  let finalAgents = updatedAgents;
+  if (finalAgents.length < CONFIG.simulation.minPopulation) {
+    const needed = CONFIG.simulation.minPopulation - finalAgents.length;
+    const reseeded = createInitialAgents(finalGrid).slice(0, needed);
+    let seedId = finalAgents.reduce((max, a) => Math.max(max, a.id), nextId);
+    for (const seed of reseeded) {
+      const colonist = { ...seed, id: ++seedId };
+      if (finalGrid[colonist.y]?.[colonist.x]?.agentId === undefined) {
+        finalGrid[colonist.y][colonist.x].agentId = colonist.id;
+        finalAgents.push(colonist);
+      }
+    }
+    logs.push(
+      `Population collapsed - reseeded ${needed} founder agents to continue evolution.`
+    );
+  }
+
+  return { agents: finalAgents, grid: finalGrid, log: logs, discoveries, gridExpanded };
 }
 
 /**
